@@ -83,12 +83,15 @@ SETWINDOWLONGWPROC real_SetWindowLongW = SetWindowLongW;
 SETWINDOWLONGWPROC real_SetWindowLongW;
 #endif
 
+static PROC g_pccrt_dummy_proc;
+
 HOOKLIST g_hook_hooklist[] =
 {
     {
         "user32.dll",
         {
             { "GetCursorPos", (PROC)fake_GetCursorPos, (PROC*)&real_GetCursorPos, 0 },
+            { "SetThreadDpiAwarenessContext", (PROC)fake_SetThreadDpiAwarenessContext, (PROC*)&g_pccrt_dummy_proc, 0 },
             { "ClipCursor", (PROC)fake_ClipCursor, (PROC*)&real_ClipCursor, 0 },
             { "ShowCursor", (PROC)fake_ShowCursor, (PROC*)&real_ShowCursor, 0 },
             { "SetCursor", (PROC)fake_SetCursor, (PROC*)&real_SetCursor, 0 },

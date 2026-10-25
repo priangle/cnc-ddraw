@@ -64,6 +64,7 @@ typedef struct CNCDDRAWCONFIG
     /* Undocumented settings */
 
     BOOL fix_alt_key_stuck;
+    BOOL fix_dpi_unaware;
     BOOL fix_not_responding;
     BOOL no_compat_warning;
     int guard_lines;

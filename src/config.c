@@ -76,6 +76,7 @@ void cfg_load()
     /* Undocumented settings */
 
     GET_BOOL(g_config.fix_alt_key_stuck, "fix_alt_key_stuck", FALSE);
+    GET_BOOL(g_config.fix_dpi_unaware, "fix_dpi_unaware", TRUE);
     GET_BOOL(GameHandlesClose, "game_handles_close", FALSE);
     GET_BOOL(g_config.fix_not_responding, "fix_not_responding", FALSE);
     GET_BOOL(g_config.no_compat_warning, "no_compat_warning", FALSE);

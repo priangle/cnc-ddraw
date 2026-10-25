@@ -9,6 +9,7 @@
 #include "debug.h"
 #include "config.h"
 #include "hook.h"
+#include "winapi_hooks.h"
 #include "indeo.h"
 #include "utils.h"
 #include "versionhelpers.h"
@@ -148,6 +149,7 @@ BOOL WINAPI DllMain(HANDLE hDll, DWORD dwReason, LPVOID lpReserved)
 
         indeo_enable();
         timeBeginPeriod(1);
+        dpi_fix_init();
         hook_init();
         break;
     }

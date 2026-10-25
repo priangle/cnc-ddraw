@@ -3,6 +3,7 @@
 #include <math.h>
 #include <vfw.h>
 #include "debug.h"
+#include "winapi_hooks.h"
 #include "config.h"
 #include "dd.h"
 #include "ddraw.h"
@@ -1778,6 +1779,12 @@ FARPROC WINAPI fake_GetProcAddress(HMODULE hModule, LPCSTR lpProcName)
 
     FARPROC proc = real_GetProcAddress(hModule, lpProcName);
 
+    if (g_config.fix_dpi_unaware && proc && HIWORD(lpProcName) &&
+        strcmp(lpProcName, "SetThreadDpiAwarenessContext") == 0)
+    {
+        return (FARPROC)fake_SetThreadDpiAwarenessContext;
+    }
+
     if (!hook || !hModule || !HIWORD(lpProcName))
         return proc;
 
@@ -2366,4 +2373,102 @@ PGETFRAME WINAPI fake_AVIStreamGetFrameOpen(PAVISTREAM pavi, LPBITMAPINFOHEADER 
     }
 
     return real_AVIStreamGetFrameOpen(pavi, lpbiWanted);
+}
+
+
+/* ---------------------------------------------------------------------------------
+ * PC-CRT patch: keep DPI-unaware thread contexts out of the process.
+ *
+ * Some fan patches (HoMM3 HD mod in its "original" DirectDraw modes) switch the main
+ * thread to DPI_AWARENESS_CONTEXT_UNAWARE before the game creates its window. Windows
+ * then bitmap-scales that window on high-DPI displays, while cnc-ddraw renders from its
+ * own (DPI-aware) thread at physical resolution: the frame is decimated 2:1 and mouse
+ * coordinates come in at half scale. With fix_dpi_unaware=true requests to make a thread
+ * unaware / system-aware are ignored, so the game window stays per-monitor aware.
+ * ------------------------------------------------------------------------------- */
+
+typedef HANDLE(WINAPI* SETTHREADDPIAWARENESSCONTEXTPROC)(HANDLE);
+typedef HANDLE(WINAPI* GETTHREADDPIAWARENESSCONTEXTPROC)(void);
+typedef BOOL(WINAPI* AREDPIAWARENESSCONTEXTSEQUALPROC)(HANDLE, HANDLE);
+
+static SETTHREADDPIAWARENESSCONTEXTPROC real_SetThreadDpiAwarenessContext;
+static GETTHREADDPIAWARENESSCONTEXTPROC real_GetThreadDpiAwarenessContext;
+static AREDPIAWARENESSCONTEXTSEQUALPROC real_AreDpiAwarenessContextsEqual;
+
+#define PCCRT_DPI_UNAWARE              ((HANDLE)-1)
+#define PCCRT_DPI_SYSTEM_AWARE         ((HANDLE)-2)
+#define PCCRT_DPI_PER_MONITOR_AWARE_V2 ((HANDLE)-4)
+#define PCCRT_DPI_UNAWARE_GDISCALED    ((HANDLE)-5)
+
+static void dpi_resolve()
+{
+    if (real_SetThreadDpiAwarenessContext)
+        return;
+
+    HMODULE user32 = GetModuleHandleA("user32.dll");
+    if (!user32)
+        return;
+
+    real_SetThreadDpiAwarenessContext =
+        (SETTHREADDPIAWARENESSCONTEXTPROC)real_GetProcAddress(user32, "SetThreadDpiAwarenessContext");
+    real_GetThreadDpiAwarenessContext =
+        (GETTHREADDPIAWARENESSCONTEXTPROC)real_GetProcAddress(user32, "GetThreadDpiAwarenessContext");
+    real_AreDpiAwarenessContextsEqual =
+        (AREDPIAWARENESSCONTEXTSEQUALPROC)real_GetProcAddress(user32, "AreDpiAwarenessContextsEqual");
+}
+
+static BOOL dpi_is_unaware(HANDLE ctx)
+{
+    if (ctx == PCCRT_DPI_UNAWARE || ctx == PCCRT_DPI_SYSTEM_AWARE || ctx == PCCRT_DPI_UNAWARE_GDISCALED)
+        return TRUE;
+
+    if (real_AreDpiAwarenessContextsEqual && ctx)
+    {
+        return
+            real_AreDpiAwarenessContextsEqual(ctx, PCCRT_DPI_UNAWARE) ||
+            real_AreDpiAwarenessContextsEqual(ctx, PCCRT_DPI_SYSTEM_AWARE) ||
+            real_AreDpiAwarenessContextsEqual(ctx, PCCRT_DPI_UNAWARE_GDISCALED);
+    }
+
+    return FALSE;
+}
+
+HANDLE WINAPI fake_SetThreadDpiAwarenessContext(HANDLE dpiContext)
+{
+    dpi_resolve();
+
+    if (!real_SetThreadDpiAwarenessContext)
+        return NULL;
+
+    if (g_config.fix_dpi_unaware && dpi_is_unaware(dpiContext))
+    {
+        TRACE("SetThreadDpiAwarenessContext(%p) blocked by fix_dpi_unaware [%p]\n", dpiContext, _ReturnAddress());
+
+        return real_GetThreadDpiAwarenessContext ? real_GetThreadDpiAwarenessContext() : PCCRT_DPI_PER_MONITOR_AWARE_V2;
+    }
+
+    return real_SetThreadDpiAwarenessContext(dpiContext);
+}
+
+/* Called from DllMain (process attach, loader thread = main thread): undo a switch that
+ * happened before cnc-ddraw was loaded. */
+void dpi_fix_init()
+{
+    if (!g_config.fix_dpi_unaware)
+        return;
+
+    dpi_resolve();
+
+    if (real_SetThreadDpiAwarenessContext && real_GetThreadDpiAwarenessContext)
+    {
+        HANDLE cur = real_GetThreadDpiAwarenessContext();
+
+        if (dpi_is_unaware(cur))
+        {
+            TRACE("dpi_fix_init: main thread was DPI-unaware, switching to per-monitor v2\n");
+
+            if (!real_SetThreadDpiAwarenessContext(PCCRT_DPI_PER_MONITOR_AWARE_V2))
+                real_SetThreadDpiAwarenessContext((HANDLE)-3); /* per-monitor v1 */
+        }
+    }
 }

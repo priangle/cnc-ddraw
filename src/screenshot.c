@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <time.h>
+#include <string.h>
 #include "dd.h"
 #include "ddpalette.h"
 #include "ddsurface.h"
@@ -138,7 +139,9 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
 
     for (int i = 0; i < strlen(title); i++)
     {
-        if (title[i] == ' ')
+        /* PC-CRT: ':' and other characters Windows forbids in file names would turn
+           "Game: Subtitle" into an NTFS alternate data stream, so the png is invisible */
+        if (title[i] == ' ' || (unsigned char)title[i] < 32 || strchr("<>:\"/\\|?*", title[i]))
         {
             title[i] = '_';
         }
