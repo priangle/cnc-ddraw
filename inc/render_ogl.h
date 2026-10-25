@@ -53,6 +53,9 @@ typedef struct OGLRENDERER
 } OGLRENDERER;
 
 DWORD WINAPI ogl_render_main(void);
+
+/* PC-CRT: hotkey (keytoggleshader) shows the plain frame instead of the custom shader */
+extern volatile LONG g_pccrt_shader_off;
 BOOL ogl_create();
 BOOL ogl_release();
 

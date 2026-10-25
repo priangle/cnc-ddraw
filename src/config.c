@@ -105,6 +105,7 @@ void cfg_load()
     GET_INT(g_config.hotkeys.unlock_cursor1, "keyunlockcursor1", VK_TAB);
     GET_INT(g_config.hotkeys.unlock_cursor2, "keyunlockcursor2", VK_RCONTROL);
     GET_INT(g_config.hotkeys.screenshot, "keyscreenshot", VK_SNAPSHOT);
+    GET_INT(g_config.hotkeys.toggle_shader, "keytoggleshader", VK_F11);
 
     /* Game specific settings */
     

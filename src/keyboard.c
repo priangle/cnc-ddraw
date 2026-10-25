@@ -7,6 +7,7 @@
 #include "keyboard.h"
 #include "mouse.h"
 #include "screenshot.h"
+#include "render_ogl.h"
 
 
 HHOOK g_keyboard_hook;
@@ -82,6 +83,14 @@ LRESULT CALLBACK keyboard_hook_proc(int code, WPARAM wParam, LPARAM lParam)
     {
         if (key_triggered)
             util_toggle_maximize();
+
+        return 1;
+    }
+
+    if (g_config.hotkeys.toggle_shader && wParam == g_config.hotkeys.toggle_shader)
+    {
+        if (key_triggered && key_down)
+            InterlockedExchange(&g_pccrt_shader_off, !g_pccrt_shader_off);
 
         return 1;
     }

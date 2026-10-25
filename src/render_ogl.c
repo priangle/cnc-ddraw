@@ -19,6 +19,8 @@ static void ogl_init_main_program();
 static void ogl_init_shader1_program();
 static void ogl_init_shader2_program();
 static void ogl_render();
+
+volatile LONG g_pccrt_shader_off = FALSE;
 static BOOL ogl_release_resources();
 static BOOL ogl_texture_upload_test();
 static BOOL ogl_shader_test();
@@ -1238,7 +1240,45 @@ static void ogl_render()
             glActiveTexture(GL_TEXTURE0);
         }
 
-        if (g_ogl.shader1_program && g_ogl.shader2_program && g_ogl.main_program)
+        if (g_pccrt_shader_off && g_ogl.shader1_program && g_ogl.main_program && glBlitFramebuffer)
+        {
+            /* PC-CRT: shader switched off by hotkey - plain nearest-neighbour frame */
+            glUseProgram(g_ogl.main_program);
+
+            glViewport(0, 0, g_ddraw.width, g_ddraw.height);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, g_ogl.frame_buffer_id[0]);
+
+            glBindVertexArray(g_ogl.main_vao);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+            glBindVertexArray(0);
+
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glActiveTexture(GL_TEXTURE0);
+
+            int x0, y0, w, h;
+
+            if (g_ddraw.child_window_exists)
+            {
+                x0 = 0; y0 = g_ddraw.render.height - g_ddraw.height; w = g_ddraw.width; h = g_ddraw.height;
+            }
+            else
+            {
+                x0 = g_ddraw.render.viewport.x;
+                y0 = g_ddraw.render.viewport.y + g_ddraw.render.opengl_y_align;
+                w = g_ddraw.render.viewport.width;
+                h = g_ddraw.render.viewport.height;
+            }
+
+            /* the framebuffer holds the frame upside down (row 0 at the bottom), flip it on the way out */
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, g_ogl.frame_buffer_id[0]);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glViewport(0, 0, g_ddraw.render.width, g_ddraw.render.height);
+            glBlitFramebuffer(0, 0, g_ddraw.width, g_ddraw.height, x0, y0 + h, x0 + w, y0, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
+        else if (g_ogl.shader1_program && g_ogl.shader2_program && g_ogl.main_program)
         {
             static int frames = 0;
             frames++;

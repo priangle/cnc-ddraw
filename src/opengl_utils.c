@@ -80,6 +80,7 @@ PFNGLDELETEVERTEXARRAYSPROC glDeleteVertexArrays;
 PFNGLACTIVETEXTUREPROC glActiveTexture;
 PFNGLGENFRAMEBUFFERSPROC glGenFramebuffers;
 PFNGLBINDFRAMEBUFFERPROC glBindFramebuffer;
+PFNGLBLITFRAMEBUFFERPROC glBlitFramebuffer;
 PFNGLFRAMEBUFFERTEXTURE2DPROC glFramebufferTexture2D;
 PFNGLDRAWBUFFERSPROC glDrawBuffers;
 PFNGLCHECKFRAMEBUFFERSTATUSPROC glCheckFramebufferStatus;
@@ -186,6 +187,7 @@ void oglu_init()
     glActiveTexture = (PFNGLACTIVETEXTUREPROC)xwglGetProcAddress("glActiveTexture");
     glGenFramebuffers = (PFNGLGENFRAMEBUFFERSPROC)xwglGetProcAddress("glGenFramebuffers");
     glBindFramebuffer = (PFNGLBINDFRAMEBUFFERPROC)xwglGetProcAddress("glBindFramebuffer");
+    glBlitFramebuffer = (PFNGLBLITFRAMEBUFFERPROC)xwglGetProcAddress("glBlitFramebuffer");
     glFramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)xwglGetProcAddress("glFramebufferTexture2D");
     glDrawBuffers = (PFNGLDRAWBUFFERSPROC)xwglGetProcAddress("glDrawBuffers");
     glCheckFramebufferStatus = (PFNGLCHECKFRAMEBUFFERSTATUSPROC)xwglGetProcAddress("glCheckFramebufferStatus");

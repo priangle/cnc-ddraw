@@ -94,6 +94,7 @@ typedef struct CNCDDRAWCONFIG
         int unlock_cursor1;
         int unlock_cursor2;
         int screenshot;
+        int toggle_shader;
     } hotkeys;
 
     /* Game specific settings */
