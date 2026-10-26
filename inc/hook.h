@@ -18,7 +18,8 @@ typedef struct HOOKLISTDATA {
     HMODULE mod;
 } HOOKLISTDATA;
 
-typedef struct HOOKLIST { char module_name[32]; HOOKLISTDATA data[39]; } HOOKLIST;
+/* PC-CRT: 48 entries - user32.dll had filled all 39 and lost its terminator */
+typedef struct HOOKLIST { char module_name[32]; HOOKLISTDATA data[48]; } HOOKLIST;
 
 typedef BOOL(WINAPI* GETCURSORPOSPROC)(LPPOINT);
 typedef BOOL(WINAPI* CLIPCURSORPROC)(const RECT*);

@@ -8,6 +8,7 @@
 #include "mouse.h"
 #include "screenshot.h"
 #include "render_ogl.h"
+#include "pccrt_osd.h"
 
 
 HHOOK g_keyboard_hook;
@@ -83,6 +84,14 @@ LRESULT CALLBACK keyboard_hook_proc(int code, WPARAM wParam, LPARAM lParam)
     {
         if (key_triggered)
             util_toggle_maximize();
+
+        return 1;
+    }
+
+    if (g_config.hotkeys.toggle_osd && wParam == g_config.hotkeys.toggle_osd)
+    {
+        if (key_triggered && key_down)
+            pccrt_osd_toggle(g_ddraw.hwnd);
 
         return 1;
     }

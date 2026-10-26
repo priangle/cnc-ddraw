@@ -16,6 +16,7 @@
 #include "render_gdi.h"
 #include "render_d3d9.h"
 #include "render_ogl.h"
+#include "pccrt_osd.h"
 #include "directinput.h"
 #include "ddsurface.h"
 #include "ddclipper.h"
@@ -26,7 +27,32 @@
 #include "palette.h"
 
 
+static BOOL fake_GetCursorPos_impl(LPPOINT lpPoint);
+
+/* PC-CRT: while the in-game panel is open the game keeps seeing the last cursor position */
 BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
+{
+    static POINT last;
+    static BOOL have_last;
+
+    if (g_pccrt_osd_visible && have_last && lpPoint)
+    {
+        *lpPoint = last;
+        return TRUE;
+    }
+
+    BOOL result = fake_GetCursorPos_impl(lpPoint);
+
+    if (result && lpPoint)
+    {
+        last = *lpPoint;
+        have_last = TRUE;
+    }
+
+    return result;
+}
+
+static BOOL fake_GetCursorPos_impl(LPPOINT lpPoint)
 {
     if (!g_ddraw.ref || !g_ddraw.hwnd || !g_ddraw.width)
         return real_GetCursorPos(lpPoint);
@@ -946,6 +972,9 @@ HDC WINAPI fake_BeginPaint(HWND hWnd, LPPAINTSTRUCT lpPaint)
 
 SHORT WINAPI fake_GetKeyState(int nVirtKey)
 {
+    if (g_pccrt_osd_visible) /* PC-CRT: input belongs to the in-game panel */
+        return 0;
+
     if (g_config.windowed && g_ddraw.ref && g_ddraw.hwnd && !util_in_foreground())
     {
         return 0;
@@ -956,6 +985,9 @@ SHORT WINAPI fake_GetKeyState(int nVirtKey)
 
 SHORT WINAPI fake_GetAsyncKeyState(int vKey)
 {
+    if (g_pccrt_osd_visible)
+        return 0;
+
     if (g_config.windowed && g_ddraw.ref && g_ddraw.hwnd && !util_in_foreground())
     {
         return 0;

@@ -6,6 +6,7 @@
 #include "hook.h"
 #include "config.h"
 #include "versionhelpers.h"
+#include "pccrt_osd.h"
 
 PFNWGLCREATECONTEXTPROC xwglCreateContext;
 PFNWGLDELETECONTEXTPROC xwglDeleteContext;
@@ -425,8 +426,10 @@ GLuint oglu_build_program_from_file(const char* file_path, BOOL core_profile)
             fread(source, file_size, 1, file);
             fclose(file);
 
-            char* vert_source = calloc(file_size + 50, 1);
-            char* frag_source = calloc(file_size + 50, 1);
+            char* vert_source = calloc(file_size + 128, 1);
+            char* frag_source = calloc(file_size + 128, 1);
+            /* PC-CRT: parameters become uniforms driven by the in-game panel */
+            const char* param_define = pccrt_osd_is_param_file(file_path) ? "#define PARAMETER_UNIFORM\n" : "";
 
             if (frag_source && vert_source)
             {
@@ -450,6 +453,8 @@ GLuint oglu_build_program_from_file(const char* file_path, BOOL core_profile)
                     strcpy(frag_source, source);
                     strcat(vert_source, "\n#define VERTEX\n");
                     strcat(frag_source, "\n#define FRAGMENT\n");
+                    strcat(vert_source, param_define);
+                    strcat(frag_source, param_define);
                     strcat(vert_source, version + strlen(version) + 1);
                     strcat(frag_source, version + strlen(version) + 1);
 
@@ -461,6 +466,8 @@ GLuint oglu_build_program_from_file(const char* file_path, BOOL core_profile)
                     strcpy(frag_source, core_profile ? "#version 150\n" : "#version 130\n");
                     strcat(vert_source, "#define VERTEX\n");
                     strcat(frag_source, "#define FRAGMENT\n");
+                    strcat(vert_source, param_define);
+                    strcat(frag_source, param_define);
                     strcat(vert_source, source);
                     strcat(frag_source, source);
 
