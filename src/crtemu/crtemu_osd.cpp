@@ -62,7 +62,60 @@ static char   g_status[300];
 static int    g_status_ok;
 static int    g_preset = -1;            // preset the current values came from, -1 = own
 
+// ---------------------------------------------------------------------------------------------
+// language: lang= in install.ini next to the shader (crt-emu-setup writes it), English by default
+// ---------------------------------------------------------------------------------------------
+
+enum
+{
+    S_TITLE, S_OWN, S_OWN_DIRTY, S_NO_PRESETS, S_AB, S_SAVE, S_REVERT, S_UNSAVED, S_PARAMS, S_FOOTER,
+    S_READ_FAIL, S_WRITE_FAIL, S_SAVED, S_DEFAULTS_ONLY, S_COUNT
+};
+
+static const char* const LANG_ID[] = { "en", "ru" };
+
+static const char* const STR[S_COUNT][2] = {
+    { "crt-emu · CRT tube###crtemu", "crt-emu · кинескоп###crtemu" },
+    { "Custom settings", "Свои настройки" },
+    { "Custom settings (unsaved)", "Свои настройки (не сохранены)" },
+    { "No presets in the shader", "Пресетов в шейдере нет" },
+    { "Before / after (F11)", "До / после (F11)" },
+    { "Save", "Сохранить" },
+    { "Revert to saved", "Вернуть сохранённое" },
+    { "unsaved", "не сохранено" },
+    { "Parameters", "Параметры" },
+    { "F12 or Esc — close · Ctrl+click — type a value · right-click — back to the saved value",
+      "F12 или Esc — закрыть · Ctrl+клик — ввести число · правый клик — вернуть сохранённое значение" },
+    { "Could not read %s", "Не удалось прочитать %s" },
+    { "Could not write the shader file (no write access to the game folder?)",
+      "Не удалось записать файл шейдера (нет прав на папку игры?)" },
+    { "Saved to %s%s", "Сохранено в %s%s" },
+    { " (defaults only)", " (только значения по умолчанию)" },
+};
+
+static int g_lang;                      // index into LANG_ID and STR
+
+static const char* tr(int s) { return STR[s][g_lang]; }
+
 static const char* skip_ws(const char* s) { while (*s == ' ' || *s == '\t') s++; return s; }
+
+static int same_ci(const char* a, const char* b, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+    {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x += 'a' - 'A';
+        if (y >= 'A' && y <= 'Z') y += 'a' - 'A';
+        if (x != y) return 0;
+    }
+    return 1;
+}
+
+static int field_is(const char* s, const char* e, const char* str)
+{
+    size_t n = strlen(str);
+    return (size_t)(e - s) == n && strncmp(s, str, n) == 0;
+}
 
 // locale-independent number parsing / printing (the game may run with a decimal comma)
 static int parse_num(const char* s, float* out, const char** end)
@@ -157,10 +210,36 @@ static int split_meta(const char* s, const char* e, const char* f[][2], int max)
     return n;
 }
 
+// "//@lang|xx" -> [*vs, *ve) = "xx"; 0 for any other line
+static int lang_line(const char* s, const char* le, const char** vs, const char** ve)
+{
+    if (strncmp(s, "//@lang|", 8) != 0) return 0;
+    *vs = s + 8;
+    *ve = le;
+    while (*ve > *vs && ((*ve)[-1] == ' ' || (*ve)[-1] == '\t')) (*ve)--;
+    return 1;
+}
+
 static void parse_params(const char* text)
 {
     NP = NG = NPR = 0;
     const char *ls, *le, *p;
+
+    // metadata block to read: "//@lang|<panel language>", else "//@lang|en", else the first one.
+    // Records before the first "//@lang" count for every language (shaders older than the blocks).
+    char block[16] = "";
+    int have_mine = 0, have_en = 0;
+    for (p = text; (p = next_line(p, &ls, &le)) != NULL;)
+    {
+        const char *vs, *ve;
+        if (!lang_line(skip_ws(ls), le, &vs, &ve)) continue;
+        if (!block[0]) copy_field(block, sizeof(block), vs, ve);
+        if (field_is(vs, ve, LANG_ID[g_lang])) have_mine = 1;
+        if (field_is(vs, ve, "en")) have_en = 1;
+    }
+    if (have_mine) snprintf(block, sizeof(block), "%s", LANG_ID[g_lang]);
+    else if (have_en) snprintf(block, sizeof(block), "en");
+    int use = 1;
 
     // pass 1: #pragma parameter NAME "desc" def min max step
     for (p = text; (p = next_line(p, &ls, &le)) != NULL;)
@@ -202,6 +281,9 @@ static void parse_params(const char* text)
         }
         else if (strncmp(s, "//@", 3) == 0)
         {
+            const char *vs, *ve;
+            if (lang_line(s, le, &vs, &ve)) { use = field_is(vs, ve, block); continue; }
+            if (!use) continue;
             const char* f[MAXOPT + 2][2];
             int n = split_meta(s + 3, le, f, MAXOPT + 2);
             if (n < 2) continue;
@@ -248,6 +330,36 @@ static int file_exists(const char* path)
     return f != NULL;
 }
 
+// "lang = xx" in install.ini in the shader's folder -> index into LANG_ID; English if absent or unknown
+static int read_lang(const char* shader_path)
+{
+    const char* slash = NULL;
+    for (const char* s = shader_path; *s; s++)
+        if (*s == '\\' || *s == '/') slash = s;
+    char path[PATHLEN];
+    snprintf(path, sizeof(path), "%.*sinstall.ini", slash ? (int)(slash - shader_path + 1) : 0, shader_path);
+    char* text = read_file(path, NULL);
+    if (!text) return 0;
+    int lang = 0;
+    const char *ls, *le, *p;
+    for (p = text; (p = next_line(p, &ls, &le)) != NULL;)
+    {
+        const char* s = skip_ws(ls);
+        const char* eq = (const char*)memchr(s, '=', le - s);
+        if (!eq) continue;
+        const char* ke = eq;
+        while (ke > s && (ke[-1] == ' ' || ke[-1] == '\t')) ke--;
+        if (ke - s != 4 || !same_ci(s, "lang", 4)) continue;
+        const char* v = skip_ws(eq + 1);
+        const char* ve = le;
+        while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t')) ve--;
+        for (int i = 0; i < (int)(sizeof(LANG_ID) / sizeof(LANG_ID[0])); i++)
+            if ((size_t)(ve - v) == strlen(LANG_ID[i]) && same_ci(v, LANG_ID[i], ve - v)) lang = i;
+    }
+    free(text);
+    return lang;
+}
+
 extern "C" void crtemu_osd_load(const char* shader_path)
 {
     char path[PATHLEN];
@@ -256,6 +368,7 @@ extern "C" void crtemu_osd_load(const char* shader_path)
 
     if (g_loaded && strcmp(path, g_file) == 0) return;   // renderer restart: keep live values
 
+    g_lang = read_lang(shader_path);
     char* text = read_file(path, NULL);
     if (!text) { g_loaded = 0; NP = 0; return; }
     parse_params(text);
@@ -289,7 +402,7 @@ static int save_params(void)
 {
     long size = 0;
     char* text = read_file(g_file, &size);
-    if (!text) { snprintf(g_status, sizeof(g_status), "Не удалось прочитать %s", g_file); return 0; }
+    if (!text) { snprintf(g_status, sizeof(g_status), tr(S_READ_FAIL), g_file); return 0; }
 
     size_t cap = (size_t)size + (size_t)NP * 64 + 64;
     char* out = (char*)malloc(cap);
@@ -355,14 +468,13 @@ static int save_params(void)
     if (!ok)
     {
         remove(tmp);
-        snprintf(g_status, sizeof(g_status), "Не удалось записать файл шейдера (нет прав на папку игры?)");
+        snprintf(g_status, sizeof(g_status), "%s", tr(S_WRITE_FAIL));
         return 0;
     }
     for (int i = 0; i < NP; i++) P[i].saved = P[i].value;
     const char* base = strrchr(g_file, '\\');
     if (!base) base = strrchr(g_file, '/');
-    snprintf(g_status, sizeof(g_status), "Сохранено в %s%s", base ? base + 1 : g_file,
-             defines ? "" : " (только значения по умолчанию)");
+    snprintf(g_status, sizeof(g_status), tr(S_SAVED), base ? base + 1 : g_file, defines ? "" : tr(S_DEFAULTS_ONLY));
     return 1;
 }
 
@@ -715,7 +827,7 @@ static int dirty(void)
 static const char* group_label(const char* id)
 {
     for (int i = 0; i < NG; i++) if (strcmp(G[i].id, id) == 0) return G[i].label;
-    return id[0] ? id : "Параметры";
+    return id[0] ? id : tr(S_PARAMS);
 }
 
 static void param_row(Param& p, float label_w)
@@ -778,25 +890,25 @@ static void draw_ui(void)
     ImGui::SetNextWindowSizeConstraints(ImVec2(360 * s, 0), ImVec2(io.DisplaySize.x - 56 * s, io.DisplaySize.y - 56 * s));
     ImGui::SetNextWindowSize(ImVec2(470 * s, 0), ImGuiCond_FirstUseEver);
     bool open = true;
-    if (!ImGui::Begin("crt-emu · кинескоп###crtemu", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    if (!ImGui::Begin(tr(S_TITLE), &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::End();
         return;
     }
 
     // presets and A/B
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize("До / после (F11)").x - ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x);
-    if (NPR > 0 && ImGui::BeginCombo("##preset", g_preset >= 0 ? PR[g_preset].name : (dirty() ? "Свои настройки (не сохранены)" : "Свои настройки")))
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(tr(S_AB)).x - ImGui::GetStyle().FramePadding.x * 2 - ImGui::GetStyle().ItemSpacing.x);
+    if (NPR > 0 && ImGui::BeginCombo("##preset", g_preset >= 0 ? PR[g_preset].name : tr(dirty() ? S_OWN_DIRTY : S_OWN)))
     {
         for (int i = 0; i < NPR; i++)
             if (ImGui::Selectable(PR[i].name, i == g_preset)) apply_preset(i);
         ImGui::EndCombo();
     }
-    else if (NPR == 0) ImGui::TextDisabled("%s", "Пресетов в шейдере нет");
+    else if (NPR == 0) ImGui::TextDisabled("%s", tr(S_NO_PRESETS));
     ImGui::SameLine();
     bool off = g_crtemu_shader_off != 0;
     if (off) ImGui::PushStyleColor(ImGuiCol_Button, rgb(226, 166, 86, 0.55f));
-    if (ImGui::Button("До / после (F11)"))
+    if (ImGui::Button(tr(S_AB)))
     {
 #ifdef _WIN32
         InterlockedExchange(&g_crtemu_shader_off, !g_crtemu_shader_off);
@@ -808,9 +920,9 @@ static void draw_ui(void)
 
     int d = dirty();
     ImGui::BeginDisabled(!d);
-    if (ImGui::Button("Сохранить")) g_status_ok = save_params();
+    if (ImGui::Button(tr(S_SAVE))) g_status_ok = save_params();
     ImGui::SameLine();
-    if (ImGui::Button("Вернуть сохранённое"))
+    if (ImGui::Button(tr(S_REVERT)))
     {
         for (int i = 0; i < NP; i++) P[i].value = P[i].saved;
         g_preset = match_preset();
@@ -821,7 +933,7 @@ static void draw_ui(void)
     {
         ImGui::SameLine();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(rgb(240, 186, 110), "%s", "не сохранено");
+        ImGui::TextColored(rgb(240, 186, 110), "%s", tr(S_UNSAVED));
     }
     // a long status must not widen the auto-sized window: wrap it at the current width
     if (g_status[0] && (!g_status_ok || !d))
@@ -868,7 +980,7 @@ static void draw_ui(void)
 
     ImGui::Spacing();
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", "F12 или Esc — закрыть · Ctrl+клик — ввести число · правый клик — вернуть сохранённое значение");
+    ImGui::TextDisabled("%s", tr(S_FOOTER));
     ImGui::PopTextWrapPos();
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsAnyItemActive()) open = false;
@@ -927,4 +1039,13 @@ extern "C" void crtemu_osd_test_show(int on) { g_crtemu_osd_visible = on; }
 extern "C" const char* crtemu_osd_test_status(void) { return g_status; }
 extern "C" void crtemu_osd_test_set(const char* name, float v) { Param* p = find_param(name, strlen(name)); if (p) p->value = v; }
 extern "C" int crtemu_osd_test_save(void) { return save_params(); }
+// what the panel would show: language, parameters, groups, options, presets, its own strings
+extern "C" const char* crtemu_osd_test_lang(void) { return LANG_ID[g_lang]; }
+extern "C" int crtemu_osd_test_count(int what) { return what == 0 ? NP : what == 1 ? NG : NPR; }
+extern "C" const char* crtemu_osd_test_label(int i) { return i >= 0 && i < NP ? P[i].label : ""; }
+extern "C" const char* crtemu_osd_test_hint(int i) { return i >= 0 && i < NP ? P[i].hint : ""; }
+extern "C" const char* crtemu_osd_test_option(int i, int k) { return i >= 0 && i < NP && k >= 0 && k < P[i].nopt ? P[i].opt[k] : ""; }
+extern "C" const char* crtemu_osd_test_group(int i) { return i >= 0 && i < NG ? G[i].label : ""; }
+extern "C" const char* crtemu_osd_test_preset(int i) { return i >= 0 && i < NPR ? PR[i].name : ""; }
+extern "C" const char* crtemu_osd_test_ui(int s) { return s >= 0 && s < S_COUNT ? tr(s) : ""; }
 #endif

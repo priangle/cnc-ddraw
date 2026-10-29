@@ -9,8 +9,10 @@
  * "Save" writes the values back into the #define / #pragma lines of the same file, so the file
  * keeps working in stock cnc-ddraw, ShaderGlass and RetroArch.
  *
- * Optional "//@..." comment lines in the shader add Russian labels, groups, hints, option lists
- * for enum-like parameters and presets (see the crt-emu build.py).
+ * Optional "//@..." comment lines in the shader add labels, groups, hints, option lists for
+ * enum-like parameters and presets (see the crt-emu build.py), one "//@lang|xx" block per language.
+ * The language is "lang=" in install.ini next to the shader (crt-emu-setup writes it): en (default)
+ * or ru. It also picks the language of the panel's own buttons.
  */
 
 #ifdef __cplusplus
@@ -20,8 +22,9 @@ extern "C" {
 /* set while the panel is shown; read by the game thread (input) and the render thread */
 extern volatile long g_crtemu_osd_visible;
 
-/* render thread: parse parameters of <shader_path>.pass1 (or <shader_path> itself).
-   Keeps the live values when the same file is loaded again after a renderer restart. */
+/* render thread: parse parameters of <shader_path>.pass1 (or <shader_path> itself), language from
+   install.ini in the same folder. Keeps the live values when the same file is loaded again after a
+   renderer restart. */
 void crtemu_osd_load(const char* shader_path);
 
 /* opengl_utils: TRUE if this shader file holds the parameters (compile it with PARAMETER_UNIFORM) */
