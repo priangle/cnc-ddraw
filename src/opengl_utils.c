@@ -6,7 +6,7 @@
 #include "hook.h"
 #include "config.h"
 #include "versionhelpers.h"
-#include "pccrt_osd.h"
+#include "crtemu_osd.h"
 
 PFNWGLCREATECONTEXTPROC xwglCreateContext;
 PFNWGLDELETECONTEXTPROC xwglDeleteContext;
@@ -428,8 +428,8 @@ GLuint oglu_build_program_from_file(const char* file_path, BOOL core_profile)
 
             char* vert_source = calloc(file_size + 128, 1);
             char* frag_source = calloc(file_size + 128, 1);
-            /* PC-CRT: parameters become uniforms driven by the in-game panel */
-            const char* param_define = pccrt_osd_is_param_file(file_path) ? "#define PARAMETER_UNIFORM\n" : "";
+            /* crt-emu: parameters become uniforms driven by the in-game panel */
+            const char* param_define = crtemu_osd_is_param_file(file_path) ? "#define PARAMETER_UNIFORM\n" : "";
 
             if (frag_source && vert_source)
             {

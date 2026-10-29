@@ -35,11 +35,11 @@ WINDRES  ?= i686-w64-mingw32-windres
 SRCS     := $(wildcard src/*.c) $(wildcard src/*/*.c) res.rc
 OBJS     := $(addsuffix .o, $(basename $(SRCS)))
 
-# PC-CRT in-game panel: Dear ImGui + panel, C++ without the C++ runtime
+# crt-emu in-game panel: Dear ImGui + panel, C++ without the C++ runtime
 CXX      ?= i686-w64-mingw32-g++
 CXXFLAGS ?= -Iinc -Isrc/imgui -O2 -Wall -std=c++11 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
             -DIMGUI_DISABLE_DEMO_WINDOWS -DIMGUI_DISABLE_WIN32_DEFAULT_IME_FUNCTIONS -DIMGUI_DISABLE_DEFAULT_SHELL_FUNCTIONS
-CXXSRCS  := $(wildcard src/imgui/*.cpp) src/imgui/backends/imgui_impl_opengl3.cpp $(wildcard src/pccrt/*.cpp)
+CXXSRCS  := $(wildcard src/imgui/*.cpp) src/imgui/backends/imgui_impl_opengl3.cpp $(wildcard src/crtemu/*.cpp)
 OBJS     += $(CXXSRCS:.cpp=.o)
 
 %.o: %.cpp

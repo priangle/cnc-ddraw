@@ -16,7 +16,7 @@
 #include "render_gdi.h"
 #include "render_d3d9.h"
 #include "render_ogl.h"
-#include "pccrt_osd.h"
+#include "crtemu_osd.h"
 #include "directinput.h"
 #include "ddsurface.h"
 #include "ddclipper.h"
@@ -29,13 +29,13 @@
 
 static BOOL fake_GetCursorPos_impl(LPPOINT lpPoint);
 
-/* PC-CRT: while the in-game panel is open the game keeps seeing the last cursor position */
+/* crt-emu: while the in-game panel is open the game keeps seeing the last cursor position */
 BOOL WINAPI fake_GetCursorPos(LPPOINT lpPoint)
 {
     static POINT last;
     static BOOL have_last;
 
-    if (g_pccrt_osd_visible && have_last && lpPoint)
+    if (g_crtemu_osd_visible && have_last && lpPoint)
     {
         *lpPoint = last;
         return TRUE;
@@ -972,7 +972,7 @@ HDC WINAPI fake_BeginPaint(HWND hWnd, LPPAINTSTRUCT lpPaint)
 
 SHORT WINAPI fake_GetKeyState(int nVirtKey)
 {
-    if (g_pccrt_osd_visible) /* PC-CRT: input belongs to the in-game panel */
+    if (g_crtemu_osd_visible) /* crt-emu: input belongs to the in-game panel */
         return 0;
 
     if (g_config.windowed && g_ddraw.ref && g_ddraw.hwnd && !util_in_foreground())
@@ -985,7 +985,7 @@ SHORT WINAPI fake_GetKeyState(int nVirtKey)
 
 SHORT WINAPI fake_GetAsyncKeyState(int vKey)
 {
-    if (g_pccrt_osd_visible)
+    if (g_crtemu_osd_visible)
         return 0;
 
     if (g_config.windowed && g_ddraw.ref && g_ddraw.hwnd && !util_in_foreground())
@@ -2409,7 +2409,7 @@ PGETFRAME WINAPI fake_AVIStreamGetFrameOpen(PAVISTREAM pavi, LPBITMAPINFOHEADER 
 
 
 /* ---------------------------------------------------------------------------------
- * PC-CRT patch: keep DPI-unaware thread contexts out of the process.
+ * crt-emu patch: keep DPI-unaware thread contexts out of the process.
  *
  * Some fan patches (HoMM3 HD mod in its "original" DirectDraw modes) switch the main
  * thread to DPI_AWARENESS_CONTEXT_UNAWARE before the game creates its window. Windows
@@ -2427,10 +2427,10 @@ static SETTHREADDPIAWARENESSCONTEXTPROC real_SetThreadDpiAwarenessContext;
 static GETTHREADDPIAWARENESSCONTEXTPROC real_GetThreadDpiAwarenessContext;
 static AREDPIAWARENESSCONTEXTSEQUALPROC real_AreDpiAwarenessContextsEqual;
 
-#define PCCRT_DPI_UNAWARE              ((HANDLE)-1)
-#define PCCRT_DPI_SYSTEM_AWARE         ((HANDLE)-2)
-#define PCCRT_DPI_PER_MONITOR_AWARE_V2 ((HANDLE)-4)
-#define PCCRT_DPI_UNAWARE_GDISCALED    ((HANDLE)-5)
+#define CRTEMU_DPI_UNAWARE              ((HANDLE)-1)
+#define CRTEMU_DPI_SYSTEM_AWARE         ((HANDLE)-2)
+#define CRTEMU_DPI_PER_MONITOR_AWARE_V2 ((HANDLE)-4)
+#define CRTEMU_DPI_UNAWARE_GDISCALED    ((HANDLE)-5)
 
 static void dpi_resolve()
 {
@@ -2451,15 +2451,15 @@ static void dpi_resolve()
 
 static BOOL dpi_is_unaware(HANDLE ctx)
 {
-    if (ctx == PCCRT_DPI_UNAWARE || ctx == PCCRT_DPI_SYSTEM_AWARE || ctx == PCCRT_DPI_UNAWARE_GDISCALED)
+    if (ctx == CRTEMU_DPI_UNAWARE || ctx == CRTEMU_DPI_SYSTEM_AWARE || ctx == CRTEMU_DPI_UNAWARE_GDISCALED)
         return TRUE;
 
     if (real_AreDpiAwarenessContextsEqual && ctx)
     {
         return
-            real_AreDpiAwarenessContextsEqual(ctx, PCCRT_DPI_UNAWARE) ||
-            real_AreDpiAwarenessContextsEqual(ctx, PCCRT_DPI_SYSTEM_AWARE) ||
-            real_AreDpiAwarenessContextsEqual(ctx, PCCRT_DPI_UNAWARE_GDISCALED);
+            real_AreDpiAwarenessContextsEqual(ctx, CRTEMU_DPI_UNAWARE) ||
+            real_AreDpiAwarenessContextsEqual(ctx, CRTEMU_DPI_SYSTEM_AWARE) ||
+            real_AreDpiAwarenessContextsEqual(ctx, CRTEMU_DPI_UNAWARE_GDISCALED);
     }
 
     return FALSE;
@@ -2476,7 +2476,7 @@ HANDLE WINAPI fake_SetThreadDpiAwarenessContext(HANDLE dpiContext)
     {
         TRACE("SetThreadDpiAwarenessContext(%p) blocked by fix_dpi_unaware [%p]\n", dpiContext, _ReturnAddress());
 
-        return real_GetThreadDpiAwarenessContext ? real_GetThreadDpiAwarenessContext() : PCCRT_DPI_PER_MONITOR_AWARE_V2;
+        return real_GetThreadDpiAwarenessContext ? real_GetThreadDpiAwarenessContext() : CRTEMU_DPI_PER_MONITOR_AWARE_V2;
     }
 
     return real_SetThreadDpiAwarenessContext(dpiContext);
@@ -2499,7 +2499,7 @@ void dpi_fix_init()
         {
             TRACE("dpi_fix_init: main thread was DPI-unaware, switching to per-monitor v2\n");
 
-            if (!real_SetThreadDpiAwarenessContext(PCCRT_DPI_PER_MONITOR_AWARE_V2))
+            if (!real_SetThreadDpiAwarenessContext(CRTEMU_DPI_PER_MONITOR_AWARE_V2))
                 real_SetThreadDpiAwarenessContext((HANDLE)-3); /* per-monitor v1 */
         }
     }

@@ -1,4 +1,4 @@
-// PC-CRT in-game panel for the cnc-ddraw OpenGL renderer - see inc/pccrt_osd.h.
+// crt-emu in-game panel for the cnc-ddraw OpenGL renderer - see inc/crtemu_osd.h.
 //
 // Threads: the panel is built and drawn on the render thread (owner of the GL context and of
 // the ImGui context). Input arrives on the game's UI thread through a WH_GETMESSAGE hook that
@@ -22,15 +22,15 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "backends/imgui_impl_opengl3.h"
-#include "pccrt_osd.h"
+#include "crtemu_osd.h"
 
-#ifdef PCCRT_OSD_TEST
-extern "C" { volatile long g_pccrt_shader_off = 0; }
+#ifdef CRTEMU_OSD_TEST
+extern "C" { volatile long g_crtemu_shader_off = 0; }
 #else
-extern "C" volatile long g_pccrt_shader_off;   // render_ogl.c, keytoggleshader
+extern "C" volatile long g_crtemu_shader_off;   // render_ogl.c, keytoggleshader
 #endif
 
-extern "C" { volatile long g_pccrt_osd_visible = 0; }
+extern "C" { volatile long g_crtemu_osd_visible = 0; }
 
 // ---------------------------------------------------------------------------------------------
 // parameters
@@ -248,7 +248,7 @@ static int file_exists(const char* path)
     return f != NULL;
 }
 
-extern "C" void pccrt_osd_load(const char* shader_path)
+extern "C" void crtemu_osd_load(const char* shader_path)
 {
     char path[PATHLEN];
     snprintf(path, sizeof(path), "%s.pass1", shader_path);
@@ -275,14 +275,14 @@ static int same_path(const char* a, const char* b)
 #endif
 }
 
-extern "C" int pccrt_osd_is_param_file(const char* file_path)
+extern "C" int crtemu_osd_is_param_file(const char* file_path)
 {
     return g_loaded && file_path && same_path(file_path, g_file);
 }
 
-extern "C" int pccrt_osd_param_count(void) { return g_loaded ? NP : 0; }
-extern "C" const char* pccrt_osd_param_name(int i) { return P[i].name; }
-extern "C" float pccrt_osd_param_value(int i) { return P[i].value; }
+extern "C" int crtemu_osd_param_count(void) { return g_loaded ? NP : 0; }
+extern "C" const char* crtemu_osd_param_name(int i) { return P[i].name; }
+extern "C" float crtemu_osd_param_value(int i) { return P[i].value; }
 
 // rewrite the #define and #pragma parameter values in the shader file
 static int save_params(void)
@@ -536,7 +536,7 @@ static int is_input_msg(UINT m)
 
 static LRESULT CALLBACK msg_hook(int code, WPARAM wParam, LPARAM lParam)
 {
-    if (code >= 0 && g_pccrt_osd_visible && lParam)
+    if (code >= 0 && g_crtemu_osd_visible && lParam)
     {
         MSG* m = (MSG*)lParam;
         if (is_input_msg(m->message))
@@ -549,10 +549,10 @@ static LRESULT CALLBACK msg_hook(int code, WPARAM wParam, LPARAM lParam)
 }
 #endif
 
-extern "C" void pccrt_osd_toggle(void* hwnd)
+extern "C" void crtemu_osd_toggle(void* hwnd)
 {
     if (!g_loaded) return;
-    long show = !g_pccrt_osd_visible;
+    long show = !g_crtemu_osd_visible;
 #ifdef _WIN32
     if (show)
     {
@@ -568,9 +568,9 @@ extern "C" void pccrt_osd_toggle(void* hwnd)
     (void)hwnd;
 #endif
 #ifdef _WIN32
-    InterlockedExchange(&g_pccrt_osd_visible, show);
+    InterlockedExchange(&g_crtemu_osd_visible, show);
 #else
-    g_pccrt_osd_visible = show;
+    g_crtemu_osd_visible = show;
 #endif
 }
 
@@ -614,7 +614,7 @@ static float dpi_scale(void* hwnd)
     return dpi >= 96 ? dpi / 96.0f : 1.0f;
 #else
     (void)hwnd;
-    const char* s = getenv("PCCRT_OSD_SCALE");
+    const char* s = getenv("CRTEMU_OSD_SCALE");
     return s ? (float)atof(s) : 1.0f;
 #endif
 }
@@ -634,7 +634,7 @@ static void load_font(ImGuiIO& io)
     }
 #else
     (void)names;
-    const char* f = getenv("PCCRT_OSD_FONT");
+    const char* f = getenv("CRTEMU_OSD_FONT");
     snprintf(path, sizeof(path), "%s", f ? f : "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
     if (file_exists(path) && io.Fonts->AddFontFromFileTTF(path, 17.0f)) return;
 #endif
@@ -778,7 +778,7 @@ static void draw_ui(void)
     ImGui::SetNextWindowSizeConstraints(ImVec2(360 * s, 0), ImVec2(io.DisplaySize.x - 56 * s, io.DisplaySize.y - 56 * s));
     ImGui::SetNextWindowSize(ImVec2(470 * s, 0), ImGuiCond_FirstUseEver);
     bool open = true;
-    if (!ImGui::Begin("PC-CRT · кинескоп###pccrt", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    if (!ImGui::Begin("crt-emu · кинескоп###crtemu", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::End();
         return;
@@ -794,14 +794,14 @@ static void draw_ui(void)
     }
     else if (NPR == 0) ImGui::TextDisabled("%s", "Пресетов в шейдере нет");
     ImGui::SameLine();
-    bool off = g_pccrt_shader_off != 0;
+    bool off = g_crtemu_shader_off != 0;
     if (off) ImGui::PushStyleColor(ImGuiCol_Button, rgb(226, 166, 86, 0.55f));
     if (ImGui::Button("До / после (F11)"))
     {
 #ifdef _WIN32
-        InterlockedExchange(&g_pccrt_shader_off, !g_pccrt_shader_off);
+        InterlockedExchange(&g_crtemu_shader_off, !g_crtemu_shader_off);
 #else
-        g_pccrt_shader_off = !g_pccrt_shader_off;
+        g_crtemu_shader_off = !g_crtemu_shader_off;
 #endif
     }
     if (off) ImGui::PopStyleColor();
@@ -877,16 +877,16 @@ static void draw_ui(void)
     if (!open)
     {
 #ifdef _WIN32
-        InterlockedExchange(&g_pccrt_osd_visible, 0);
+        InterlockedExchange(&g_crtemu_osd_visible, 0);
 #else
-        g_pccrt_osd_visible = 0;
+        g_crtemu_osd_visible = 0;
 #endif
     }
 }
 
-extern "C" void pccrt_osd_render(void* hwnd, int width, int height)
+extern "C" void crtemu_osd_render(void* hwnd, int width, int height)
 {
-    if (!g_pccrt_osd_visible || !g_loaded || width <= 0 || height <= 0) return;
+    if (!g_crtemu_osd_visible || !g_loaded || width <= 0 || height <= 0) return;
     ensure_context(hwnd);
     ImGui::SetCurrentContext(g_ctx);
     if (!g_gl_ready)
@@ -910,7 +910,7 @@ extern "C" void pccrt_osd_render(void* hwnd, int width, int height)
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
-extern "C" void pccrt_osd_gl_shutdown(void)
+extern "C" void crtemu_osd_gl_shutdown(void)
 {
     if (g_ctx && g_gl_ready)
     {
@@ -920,11 +920,11 @@ extern "C" void pccrt_osd_gl_shutdown(void)
     }
 }
 
-#ifdef PCCRT_OSD_TEST
+#ifdef CRTEMU_OSD_TEST
 // host test driver: feed synthetic input and draw one frame into the current GL framebuffer
-extern "C" void pccrt_osd_test_input(unsigned msg, unsigned long long w, long long l) { q_push(msg, w, l); }
-extern "C" void pccrt_osd_test_show(int on) { g_pccrt_osd_visible = on; }
-extern "C" const char* pccrt_osd_test_status(void) { return g_status; }
-extern "C" void pccrt_osd_test_set(const char* name, float v) { Param* p = find_param(name, strlen(name)); if (p) p->value = v; }
-extern "C" int pccrt_osd_test_save(void) { return save_params(); }
+extern "C" void crtemu_osd_test_input(unsigned msg, unsigned long long w, long long l) { q_push(msg, w, l); }
+extern "C" void crtemu_osd_test_show(int on) { g_crtemu_osd_visible = on; }
+extern "C" const char* crtemu_osd_test_status(void) { return g_status; }
+extern "C" void crtemu_osd_test_set(const char* name, float v) { Param* p = find_param(name, strlen(name)); if (p) p->value = v; }
+extern "C" int crtemu_osd_test_save(void) { return save_params(); }
 #endif

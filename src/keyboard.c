@@ -8,7 +8,7 @@
 #include "mouse.h"
 #include "screenshot.h"
 #include "render_ogl.h"
-#include "pccrt_osd.h"
+#include "crtemu_osd.h"
 
 
 HHOOK g_keyboard_hook;
@@ -91,7 +91,7 @@ LRESULT CALLBACK keyboard_hook_proc(int code, WPARAM wParam, LPARAM lParam)
     if (g_config.hotkeys.toggle_osd && wParam == g_config.hotkeys.toggle_osd)
     {
         if (key_triggered && key_down)
-            pccrt_osd_toggle(g_ddraw.hwnd);
+            crtemu_osd_toggle(g_ddraw.hwnd);
 
         return 1;
     }
@@ -99,7 +99,7 @@ LRESULT CALLBACK keyboard_hook_proc(int code, WPARAM wParam, LPARAM lParam)
     if (g_config.hotkeys.toggle_shader && wParam == g_config.hotkeys.toggle_shader)
     {
         if (key_triggered && key_down)
-            InterlockedExchange(&g_pccrt_shader_off, !g_pccrt_shader_off);
+            InterlockedExchange(&g_crtemu_shader_off, !g_crtemu_shader_off);
 
         return 1;
     }

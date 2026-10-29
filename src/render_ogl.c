@@ -8,7 +8,7 @@
 #include "openglshader.h"
 #include "render_gdi.h"
 #include "render_ogl.h"
-#include "pccrt_osd.h"
+#include "crtemu_osd.h"
 #include "utils.h"
 #include "debug.h"
 
@@ -21,16 +21,16 @@ static void ogl_init_shader1_program();
 static void ogl_init_shader2_program();
 static void ogl_render();
 
-volatile LONG g_pccrt_shader_off = FALSE;
+volatile LONG g_crtemu_shader_off = FALSE;
 
-/* PC-CRT: shader parameters as uniforms (values come from the in-game panel) */
-static GLuint g_pccrt_prog[4];
-static GLint g_pccrt_loc[4][64];
-static int g_pccrt_next;
+/* crt-emu: shader parameters as uniforms (values come from the in-game panel) */
+static GLuint g_crtemu_prog[4];
+static GLint g_crtemu_loc[4][64];
+static int g_crtemu_next;
 
-static void pccrt_apply_params(GLuint prog)
+static void crtemu_apply_params(GLuint prog)
 {
-    int n = pccrt_osd_param_count();
+    int n = crtemu_osd_param_count();
 
     if (!n || !prog || !glGetUniformLocation || !glUniform1f)
         return;
@@ -42,7 +42,7 @@ static void pccrt_apply_params(GLuint prog)
 
     for (int i = 0; i < 4; i++)
     {
-        if (g_pccrt_prog[i] == prog)
+        if (g_crtemu_prog[i] == prog)
         {
             k = i;
             break;
@@ -51,17 +51,17 @@ static void pccrt_apply_params(GLuint prog)
 
     if (k < 0)
     {
-        k = g_pccrt_next++ & 3;
-        g_pccrt_prog[k] = prog;
+        k = g_crtemu_next++ & 3;
+        g_crtemu_prog[k] = prog;
 
         for (int i = 0; i < n; i++)
-            g_pccrt_loc[k][i] = glGetUniformLocation(prog, pccrt_osd_param_name(i));
+            g_crtemu_loc[k][i] = glGetUniformLocation(prog, crtemu_osd_param_name(i));
     }
 
     for (int i = 0; i < n; i++)
     {
-        if (g_pccrt_loc[k][i] != -1)
-            glUniform1f(g_pccrt_loc[k][i], pccrt_osd_param_value(i));
+        if (g_crtemu_loc[k][i] != -1)
+            glUniform1f(g_crtemu_loc[k][i], crtemu_osd_param_value(i));
     }
 }
 static BOOL ogl_release_resources();
@@ -317,7 +317,7 @@ static void ogl_build_programs()
                 g_ddraw.render.viewport.height != g_ddraw.height ||
                 g_config.vhack)
             {
-                pccrt_osd_load(shader_path);
+                crtemu_osd_load(shader_path);
 
                 g_ogl.shader1_program = oglu_build_program_from_file(shader_path, core_profile);
 
@@ -1046,7 +1046,7 @@ static void ogl_render()
     DWORD timeout = g_config.minfps > 0 ? g_ddraw.minfps_tick_len : INFINITE;
 
     while (g_ogl.use_opengl && g_ddraw.render.run &&
-        (g_config.minfps < 0 || WaitForSingleObject(g_ddraw.render.sem, g_pccrt_osd_visible ? 16 : timeout) != WAIT_FAILED) &&
+        (g_config.minfps < 0 || WaitForSingleObject(g_ddraw.render.sem, g_crtemu_osd_visible ? 16 : timeout) != WAIT_FAILED) &&
         g_ddraw.render.run)
     {
 #if _DEBUG
@@ -1285,9 +1285,9 @@ static void ogl_render()
             glActiveTexture(GL_TEXTURE0);
         }
 
-        if (g_pccrt_shader_off && g_ogl.shader1_program && g_ogl.main_program && glBlitFramebuffer)
+        if (g_crtemu_shader_off && g_ogl.shader1_program && g_ogl.main_program && glBlitFramebuffer)
         {
-            /* PC-CRT: shader switched off by hotkey - plain nearest-neighbour frame */
+            /* crt-emu: shader switched off by hotkey - plain nearest-neighbour frame */
             glUseProgram(g_ogl.main_program);
 
             glViewport(0, 0, g_ddraw.width, g_ddraw.height);
@@ -1352,7 +1352,7 @@ static void ogl_render()
             }
 
             glUseProgram(g_ogl.shader1_program);
-            pccrt_apply_params(g_ogl.shader1_program);
+            crtemu_apply_params(g_ogl.shader1_program);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, g_ogl.frame_buffer_tex_id[0]);
 
@@ -1383,7 +1383,7 @@ static void ogl_render()
             }
 
             glUseProgram(g_ogl.shader2_program);
-            pccrt_apply_params(g_ogl.shader2_program);
+            crtemu_apply_params(g_ogl.shader2_program);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, g_ogl.frame_buffer_tex_id[1]);
 
@@ -1434,7 +1434,7 @@ static void ogl_render()
             /* apply filter */
 
             glUseProgram(g_ogl.shader1_program);
-            pccrt_apply_params(g_ogl.shader1_program);
+            crtemu_apply_params(g_ogl.shader1_program);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, g_ogl.frame_buffer_tex_id[0]);
 
@@ -1465,10 +1465,10 @@ static void ogl_render()
         if (g_ddraw.bnet_active)
             glClear(GL_COLOR_BUFFER_BIT);
 
-        if (g_pccrt_osd_visible)
+        if (g_crtemu_osd_visible)
         {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            pccrt_osd_render(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height);
+            crtemu_osd_render(g_ddraw.hwnd, g_ddraw.render.width, g_ddraw.render.height);
         }
 
         SwapBuffers(g_ogl.hdc);
@@ -1495,8 +1495,8 @@ static void ogl_render()
 
 static BOOL ogl_release_resources()
 {
-    pccrt_osd_gl_shutdown();
-    memset(g_pccrt_prog, 0, sizeof(g_pccrt_prog));
+    crtemu_osd_gl_shutdown();
+    memset(g_crtemu_prog, 0, sizeof(g_crtemu_prog));
 
     glDeleteTextures(TEXTURE_COUNT, g_ogl.surface_tex_ids);
 

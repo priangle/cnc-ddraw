@@ -139,7 +139,7 @@ BOOL ss_take_screenshot(IDirectDrawSurfaceImpl* src)
 
     for (int i = 0; i < strlen(title); i++)
     {
-        /* PC-CRT: ':' and other characters Windows forbids in file names would turn
+        /* crt-emu: ':' and other characters Windows forbids in file names would turn
            "Game: Subtitle" into an NTFS alternate data stream, so the png is invisible */
         if (title[i] == ' ' || (unsigned char)title[i] < 32 || strchr("<>:\"/\\|?*", title[i]))
         {
