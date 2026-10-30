@@ -63,16 +63,19 @@ static int    g_status_ok;
 static int    g_preset = -1;            // preset the current values came from, -1 = own
 
 // ---------------------------------------------------------------------------------------------
-// language: lang= in install.ini next to the shader (crt-emu-setup writes it), English by default
+// language: lang= in install.ini next to the shader (the panel's EN/RU buttons write it), else the
+// game's language (HD mod profile), else the Windows display language, else English
 // ---------------------------------------------------------------------------------------------
 
 enum
 {
     S_TITLE, S_OWN, S_OWN_DIRTY, S_NO_PRESETS, S_AB, S_SAVE, S_REVERT, S_UNSAVED, S_PARAMS, S_FOOTER,
-    S_READ_FAIL, S_WRITE_FAIL, S_SAVED, S_DEFAULTS_ONLY, S_COUNT
+    S_READ_FAIL, S_WRITE_FAIL, S_SAVED, S_DEFAULTS_ONLY, S_LANG_TIP, S_LANG_FAIL, S_COUNT
 };
 
 static const char* const LANG_ID[] = { "en", "ru" };
+static const char* const LANG_BTN[] = { "EN", "RU" };
+enum { NLANG = 2 };
 
 static const char* const STR[S_COUNT][2] = {
     { "crt-emu · CRT tube###crtemu", "crt-emu · кинескоп###crtemu" },
@@ -91,6 +94,9 @@ static const char* const STR[S_COUNT][2] = {
       "Не удалось записать файл шейдера (нет прав на папку игры?)" },
     { "Saved to %s%s", "Сохранено в %s%s" },
     { " (defaults only)", " (только значения по умолчанию)" },
+    { "Panel language", "Язык панели" },
+    { "Could not save the language to install.ini (no write access to the game folder?)",
+      "Не удалось сохранить язык в install.ini (нет прав на папку игры?)" },
 };
 
 static int g_lang;                      // index into LANG_ID and STR
@@ -330,34 +336,116 @@ static int file_exists(const char* path)
     return f != NULL;
 }
 
-// "lang = xx" in install.ini in the shader's folder -> index into LANG_ID; English if absent or unknown
+// "a\b\c" -> "a\b\", "a\b\" -> "a\", "a" -> ""
+static void parent_dir(char* path)
+{
+    size_t n = strlen(path);
+    if (n && (path[n - 1] == '\\' || path[n - 1] == '/')) n--;
+    while (n && path[n - 1] != '\\' && path[n - 1] != '/') n--;
+    path[n] = 0;
+}
+
+// install.ini in the folder of the shader file
+static void ini_path(char* out, size_t n, const char* shader_file)
+{
+    char dir[PATHLEN];
+    snprintf(dir, sizeof(dir), "%s", shader_file);
+    parent_dir(dir);
+    snprintf(out, n, "%sinstall.ini", dir);
+}
+
+// "key = value" (key in any case) -> [*vs, *ve) = the value without the spaces around it
+static int ini_line(const char* ls, const char* le, const char* key, const char** vs, const char** ve)
+{
+    const char* s = skip_ws(ls);
+    const char* eq = (const char*)memchr(s, '=', le - s);
+    if (!eq) return 0;
+    const char* ke = eq;
+    while (ke > s && (ke[-1] == ' ' || ke[-1] == '\t')) ke--;
+    size_t kl = strlen(key);
+    if ((size_t)(ke - s) != kl || !same_ci(s, key, kl)) return 0;
+    *vs = skip_ws(eq + 1);
+    *ve = le;
+    while (*ve > *vs && ((*ve)[-1] == ' ' || (*ve)[-1] == '\t')) (*ve)--;
+    return 1;
+}
+
+// "en" / "RU" -> index into LANG_ID, -1 for any other
+static int lang_index(const char* s, const char* e)
+{
+    for (int i = 0; i < NLANG; i++)
+        if ((size_t)(e - s) == strlen(LANG_ID[i]) && same_ci(s, LANG_ID[i], e - s)) return i;
+    return -1;
+}
+
+// "lang = xx" in install.ini next to the shader; -1 if there is none or the language is unknown
 static int read_lang(const char* shader_path)
 {
-    const char* slash = NULL;
-    for (const char* s = shader_path; *s; s++)
-        if (*s == '\\' || *s == '/') slash = s;
     char path[PATHLEN];
-    snprintf(path, sizeof(path), "%.*sinstall.ini", slash ? (int)(slash - shader_path + 1) : 0, shader_path);
+    ini_path(path, sizeof(path), shader_path);
     char* text = read_file(path, NULL);
-    if (!text) return 0;
-    int lang = 0;
+    if (!text) return -1;
+    int lang = -1;
+    const char *ls, *le, *p, *vs, *ve;
+    for (p = text; (p = next_line(p, &ls, &le)) != NULL;)
+    {
+        if (!ini_line(ls, le, "lang", &vs, &ve)) continue;
+        int l = lang_index(vs, ve);
+        if (l >= 0) lang = l;
+    }
+    free(text);
+    return lang;
+}
+
+// the game's language: <Language> = "#ru.ini" in the HD mod profile of HotA (only that one), two
+// folders above the shader (Shaders\crt-emu\); -1 if there is no profile or its language is not ours
+static int game_lang(const char* shader_path)
+{
+    char path[PATHLEN];
+    snprintf(path, sizeof(path), "%s", shader_path);
+    parent_dir(path);
+    parent_dir(path);
+    parent_dir(path);
+    size_t n = strlen(path);
+    snprintf(path + n, sizeof(path) - n, "_HD3_Data/Settings/hota.ini");
+    char* text = read_file(path, NULL);
+    if (!text) return -1;
+    int lang = -1;
     const char *ls, *le, *p;
     for (p = text; (p = next_line(p, &ls, &le)) != NULL;)
     {
         const char* s = skip_ws(ls);
-        const char* eq = (const char*)memchr(s, '=', le - s);
-        if (!eq) continue;
-        const char* ke = eq;
-        while (ke > s && (ke[-1] == ' ' || ke[-1] == '\t')) ke--;
-        if (ke - s != 4 || !same_ci(s, "lang", 4)) continue;
-        const char* v = skip_ws(eq + 1);
-        const char* ve = le;
-        while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t')) ve--;
-        for (int i = 0; i < (int)(sizeof(LANG_ID) / sizeof(LANG_ID[0])); i++)
-            if ((size_t)(ve - v) == strlen(LANG_ID[i]) && same_ci(v, LANG_ID[i], ve - v)) lang = i;
+        if (le - s < 10 || strncmp(s, "<Language>", 10) != 0) continue;
+        const char* v = (const char*)memchr(s, '#', le - s);
+        if (v)
+        {
+            const char* e = ++v;
+            while (e < le && *e != '.' && *e != '"') e++;
+            lang = lang_index(v, e);
+        }
+        break;
     }
     free(text);
     return lang;
+}
+
+// the Windows display language; -1 elsewhere
+static int system_lang(void)
+{
+#ifdef _WIN32
+    static const char ru[] = "ru";
+    return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_RUSSIAN ? lang_index(ru, ru + 2) : 0;
+#else
+    return -1;
+#endif
+}
+
+static int pick_lang(const char* shader_path)
+{
+    int lang = read_lang(shader_path);
+    if (lang < 0) lang = game_lang(shader_path);
+    if (lang < 0) lang = system_lang();
+    return lang < 0 ? 0 : lang;
 }
 
 extern "C" void crtemu_osd_load(const char* shader_path)
@@ -368,7 +456,7 @@ extern "C" void crtemu_osd_load(const char* shader_path)
 
     if (g_loaded && strcmp(path, g_file) == 0) return;   // renderer restart: keep live values
 
-    g_lang = read_lang(shader_path);
+    g_lang = pick_lang(shader_path);
     char* text = read_file(path, NULL);
     if (!text) { g_loaded = 0; NP = 0; return; }
     parse_params(text);
@@ -396,6 +484,23 @@ extern "C" int crtemu_osd_is_param_file(const char* file_path)
 extern "C" int crtemu_osd_param_count(void) { return g_loaded ? NP : 0; }
 extern "C" const char* crtemu_osd_param_name(int i) { return P[i].name; }
 extern "C" float crtemu_osd_param_value(int i) { return P[i].value; }
+
+// write through path.tmp, so a failed write leaves the old file whole
+static int replace_file(const char* path, const char* data, size_t len)
+{
+    char tmp[PATHLEN + 8];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE* f = fopen(tmp, "wb");
+    int ok = f && fwrite(data, 1, len, f) == len;
+    if (f) ok = (fclose(f) == 0) && ok;
+#ifdef _WIN32
+    ok = ok && MoveFileExA(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+#else
+    ok = ok && rename(tmp, path) == 0;
+#endif
+    if (!ok) remove(tmp);
+    return ok;
+}
 
 // rewrite the #define and #pragma parameter values in the shader file
 static int save_params(void)
@@ -454,20 +559,10 @@ static int save_params(void)
     }
     free(text);
 
-    char tmp[PATHLEN + 8];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", g_file);
-    FILE* f = fopen(tmp, "wb");
-    int ok = f && fwrite(out, 1, o, f) == o;
-    if (f) ok = (fclose(f) == 0) && ok;
+    int ok = replace_file(g_file, out, o);
     free(out);
-#ifdef _WIN32
-    ok = ok && MoveFileExA(tmp, g_file, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
-#else
-    ok = ok && rename(tmp, g_file) == 0;
-#endif
     if (!ok)
     {
-        remove(tmp);
         snprintf(g_status, sizeof(g_status), "%s", tr(S_WRITE_FAIL));
         return 0;
     }
@@ -525,6 +620,95 @@ static void apply_preset(int k)
         s = *e ? e + 1 : e;
     }
     g_preset = k;
+}
+
+// lang=xx in install.ini next to the shader: lang= lines are replaced, everything else is kept byte
+// for byte; without such a line it is appended, without the file it is created
+static int write_lang(int lang)
+{
+    char path[PATHLEN];
+    ini_path(path, sizeof(path), g_file);
+    long size = 0;
+    char* text = read_file(path, &size);
+    size_t cap = (text ? (size_t)size * 2 : 0) + 64;
+    char* out = (char*)malloc(cap);
+    if (!out) { free(text); return 0; }
+    size_t o = 0;
+    int done = 0;
+    if (text)
+    {
+        const char *ls, *le, *p, *vs, *ve;
+        for (p = text; (p = next_line(p, &ls, &le)) != NULL;)
+        {
+            if (ini_line(ls, le, "lang", &vs, &ve))
+            {
+                o += snprintf(out + o, cap - o, "lang=%s", LANG_ID[lang]);
+                memcpy(out + o, le, p - le); o += p - le;   // the original line break
+                done = 1;
+            }
+            else { memcpy(out + o, ls, p - ls); o += p - ls; }
+        }
+        if (!done && o && out[o - 1] != '\n') { memcpy(out + o, "\r\n", 2); o += 2; }
+        free(text);
+    }
+    else o += snprintf(out, cap, "[crt-emu]\r\n");
+    if (!done) o += snprintf(out + o, cap - o, "lang=%s\r\n", LANG_ID[lang]);
+    int ok = replace_file(path, out, o);
+    free(out);
+    return ok;
+}
+
+// the EN/RU buttons: texts of the new //@lang block and the panel's own strings at once, the live
+// and the saved values stay as they are, the choice goes to install.ini. A press on the lit button
+// writes it too: the language the panel opened with (the game's, Windows') becomes a choice.
+static void set_lang(int lang)
+{
+    if (lang < 0 || lang >= NLANG || !g_file[0]) return;
+    if (lang != g_lang)
+    {
+        struct Keep { char name[sizeof(P[0].name)]; float value, saved; };
+        static Keep keep[MAXP];
+        int n = NP;
+        for (int i = 0; i < n; i++)
+        {
+            memcpy(keep[i].name, P[i].name, sizeof(keep[i].name));
+            keep[i].value = P[i].value;
+            keep[i].saved = P[i].saved;
+        }
+        char* text = read_file(g_file, NULL);
+        if (!text)
+        {
+            snprintf(g_status, sizeof(g_status), tr(S_READ_FAIL), g_file);
+            g_status_ok = 0;
+            return;
+        }
+        g_lang = lang;
+        parse_params(text);
+        free(text);
+        for (int i = 0; i < n; i++)
+        {
+            Param* pr = find_param(keep[i].name, strlen(keep[i].name));
+            if (pr) { pr->value = keep[i].value; pr->saved = keep[i].saved; }
+        }
+        g_preset = match_preset();
+        g_loaded = NP > 0;
+        if (!g_loaded)
+        {
+            // the file lost its parameters meanwhile: close the panel, F12 could not (it needs g_loaded)
+#ifdef _WIN32
+            InterlockedExchange(&g_crtemu_osd_visible, 0);
+#else
+            g_crtemu_osd_visible = 0;
+#endif
+            return;
+        }
+    }
+    g_status[0] = 0;
+    if (!write_lang(lang))
+    {
+        snprintf(g_status, sizeof(g_status), "%s", tr(S_LANG_FAIL));
+        g_status_ok = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -882,8 +1066,11 @@ static void param_row(Param& p, float label_w)
     ImGui::PopID();
 }
 
+static int g_lang_pending = -1;         // EN/RU pressed: switched before the next frame's widgets
+
 static void draw_ui(void)
 {
+    if (g_lang_pending >= 0) { set_lang(g_lang_pending); g_lang_pending = -1; }
     ImGuiIO& io = ImGui::GetIO();
     const float s = g_scale;
     ImGui::SetNextWindowPos(ImVec2(28 * s, 28 * s), ImGuiCond_FirstUseEver);
@@ -935,6 +1122,25 @@ static void draw_ui(void)
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(rgb(240, 186, 110), "%s", tr(S_UNSAVED));
     }
+    // panel language: EN / RU at the right end of the Save row, the current one lit
+    {
+        const ImGuiStyle& st = ImGui::GetStyle();
+        float w = st.ItemSpacing.x * (NLANG - 1);
+        for (int i = 0; i < NLANG; i++) w += ImGui::CalcTextSize(LANG_BTN[i]).x + st.FramePadding.x * 2;
+        ImGui::SameLine();
+        float x = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - w;
+        if (x > ImGui::GetCursorPosX()) ImGui::SetCursorPosX(x);
+        for (int i = 0; i < NLANG; i++)
+        {
+            if (i) ImGui::SameLine();
+            ImGui::PushID(i);
+            if (i == g_lang) ImGui::PushStyleColor(ImGuiCol_Button, rgb(226, 166, 86, 0.55f));
+            if (ImGui::Button(LANG_BTN[i])) g_lang_pending = i;
+            if (i == g_lang) ImGui::PopStyleColor();
+            ImGui::SetItemTooltip("%s", tr(S_LANG_TIP));
+            ImGui::PopID();
+        }
+    }
     // a long status must not widen the auto-sized window: wrap it at the current width
     if (g_status[0] && (!g_status_ok || !d))
     {
@@ -965,7 +1171,10 @@ static void draw_ui(void)
             if (!shown[i] && (gid ? strcmp(P[i].group, gid) == 0 : 1)) count++;
         if (!count) continue;
         int open_default = !gid || strcmp(gid, "light") == 0 || strcmp(gid, "beam") == 0 || strcmp(gid, "screen") == 0;
-        if (ImGui::CollapsingHeader(gid ? G[gi].label : group_label(""), open_default ? ImGuiTreeNodeFlags_DefaultOpen : 0))
+        // the ID is the group id, not its label: a language switch keeps groups open or closed
+        char head[sizeof(G[0].label) + sizeof(G[0].id) + 8];
+        snprintf(head, sizeof(head), "%s###grp_%s", gid ? G[gi].label : group_label(""), gid ? gid : "");
+        if (ImGui::CollapsingHeader(head, open_default ? ImGuiTreeNodeFlags_DefaultOpen : 0))
         {
             for (int i = 0; i < NP; i++)
                 if (!shown[i] && (gid ? strcmp(P[i].group, gid) == 0 : 1)) { param_row(P[i], label_w); shown[i] = 1; }
@@ -1048,4 +1257,6 @@ extern "C" const char* crtemu_osd_test_option(int i, int k) { return i >= 0 && i
 extern "C" const char* crtemu_osd_test_group(int i) { return i >= 0 && i < NG ? G[i].label : ""; }
 extern "C" const char* crtemu_osd_test_preset(int i) { return i >= 0 && i < NPR ? PR[i].name : ""; }
 extern "C" const char* crtemu_osd_test_ui(int s) { return s >= 0 && s < S_COUNT ? tr(s) : ""; }
+// what the EN/RU buttons do (without waiting for a frame)
+extern "C" void crtemu_osd_test_set_lang(int lang) { set_lang(lang); }
 #endif
