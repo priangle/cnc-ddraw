@@ -74,7 +74,7 @@ enum
 {
     S_TITLE, S_OWN, S_OWN_DIRTY, S_NO_PRESETS, S_AB, S_SAVE, S_REVERT, S_UNSAVED, S_PARAMS, S_FOOTER,
     S_READ_FAIL, S_WRITE_FAIL, S_SAVED, S_DEFAULTS_ONLY, S_LANG_TIP, S_LANG_FAIL,
-    S_LENS, S_LENS_ZOOM, S_LENS_SIZE, S_LENS_TIP, S_COUNT
+    S_LENS, S_LENS_ZOOM, S_LENS_SIZE, S_LENS_PX, S_LENS_TIP, S_COUNT
 };
 
 static const char* const LANG_ID[] = { "en", "ru" };
@@ -102,8 +102,9 @@ static const char* const STR[S_COUNT][2] = {
     { "Could not save the language to install.ini (no write access to the game folder?)",
       "Не удалось сохранить язык в install.ini (нет прав на папку игры?)" },
     { "Magnifier", "Лупа" },
-    { "Zoom ×%d", "Увеличение ×%d" },
-    { "Size %d px", "Размер %d пикс." },
+    { "Zoom", "Увеличение" },
+    { "Size", "Размер" },
+    { "%d px", "%d пикс." },
     { "A close-up of the screen's own pixels: the mask and the lines at their real size. "
       "Drag the magnifier with the mouse, the wheel over it changes the zoom. "
       "It is shown only with the panel; Win+Shift+S takes a screenshot with it.",
@@ -1027,6 +1028,102 @@ static const char* group_label(const char* id)
     return id[0] ? id : tr(S_PARAMS);
 }
 
+static float scalar_f(ImGuiDataType type, const void* p)
+{
+    return type == ImGuiDataType_Float ? *(const float*)p : (float)*(const int*)p;
+}
+
+// A slider drawn as a thin line with a pill-shaped handle that carries the value, so the number
+// is never under the handle. The handle is as wide as the widest value of this slider and does not
+// change size. Input is ImGui's own, as in ImGui::SliderScalar: drag, Ctrl+click or Enter to type
+// a number, arrows. The pill is the grab rectangle SliderBehavior returns.
+static bool pill_slider(const char* id_label, ImGuiDataType type, void* v, const void* vmin, const void* vmax,
+                        const char* fmt, ImGuiSliderFlags flags)
+{
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if (window->SkipItems) return false;
+    ImGuiContext& g = *GImGui;
+    const ImGuiStyle& st = g.Style;
+    const ImGuiID id = window->GetID(id_label);
+    const ImVec2 pos = window->DC.CursorPos;
+    const ImRect bb(pos, ImVec2(pos.x + ImGui::CalcItemWidth(), pos.y + ImGui::GetFrameHeight()));
+    ImGui::ItemSize(bb, st.FramePadding.y);
+    if (!ImGui::ItemAdd(bb, id, &bb, ImGuiItemFlags_Inputable)) return false;
+
+    const bool hovered = ImGui::ItemHoverable(bb, id, g.LastItemData.ItemFlags);
+    bool typing = ImGui::TempInputIsActive(id);
+    if (!typing)
+    {
+        const bool clicked = hovered && ImGui::IsMouseClicked(0, ImGuiInputFlags_None, id);
+        const bool activate = clicked || g.NavActivateId == id;
+        if (activate && clicked) ImGui::SetKeyOwner(ImGuiKey_MouseLeft, id);
+        if (activate && ((clicked && g.IO.KeyCtrl) || (g.NavActivateId == id && (g.NavActivateFlags & ImGuiActivateFlags_PreferInput))))
+            typing = true;
+        if (activate) memcpy(&g.ActiveIdValueOnActivation, v, ImGui::DataTypeGetInfo(type)->Size);
+        if (activate && !typing)
+        {
+            ImGui::SetActiveID(id, window);
+            ImGui::SetFocusID(id, window);
+            ImGui::FocusWindow(window);
+            g.ActiveIdUsingNavDirMask |= (1 << ImGuiDir_Left) | (1 << ImGuiDir_Right);
+        }
+    }
+    if (typing)
+    {
+        const bool clamp = (flags & ImGuiSliderFlags_ClampOnInput) != 0;
+        return ImGui::TempInputScalar(bb, id, id_label, type, v, fmt, clamp ? vmin : NULL, clamp ? vmax : NULL);
+    }
+
+    // pill width: the widest of the two ends and the current value, plus padding
+    char text[64], end_text[64];
+    float text_w = 0.0f;
+    const void* ends[2] = { vmin, vmax };
+    for (int i = 0; i < 2; i++)
+    {
+        ImGui::DataTypeFormatString(end_text, sizeof(end_text), type, ends[i], fmt);
+        text_w = ImMax(text_w, ImGui::CalcTextSize(end_text).x);
+    }
+    ImGui::DataTypeFormatString(text, sizeof(text), type, v, fmt);
+    const ImVec2 text_sz = ImGui::CalcTextSize(text);
+    text_w = ImMax(text_w, text_sz.x);
+
+    ImRect grab;
+    ImGui::PushStyleVar(ImGuiStyleVar_GrabMinSize, text_w + st.FramePadding.x * 2.0f);
+    const bool changed = ImGui::SliderBehavior(bb, id, type, v, vmin, vmax, fmt, flags, &grab);
+    ImGui::PopStyleVar();
+    if (changed)
+    {
+        ImGui::MarkItemEdited(id);
+        ImGui::DataTypeFormatString(text, sizeof(text), type, v, fmt);
+    }
+
+    // the line: dim, amber from the start (or from zero, if zero is inside the range) to the pill
+    ImDrawList* dl = window->DrawList;
+    const bool active = g.ActiveId == id;
+    const float s = g_scale, half = ImMax(1.0f, floorf(1.0f * s));
+    const float cy = floorf((bb.Min.y + bb.Max.y) * 0.5f);
+    const float x0 = bb.Min.x + 2.0f, x1 = bb.Max.x - 2.0f;           // 2: ImGui's grab padding
+    const float gw = grab.Max.x - grab.Min.x, pill_x = (grab.Min.x + grab.Max.x) * 0.5f;
+    const float lo = scalar_f(type, vmin), hi = scalar_f(type, vmax);
+    float from = x0;
+    if (lo < 0.0f && hi > 0.0f)
+        from = x0 + gw * 0.5f + (x1 - x0 - gw) * (0.0f - lo) / (hi - lo);
+    ImGui::RenderNavCursor(bb, id);
+    dl->AddRectFilled(ImVec2(x0, cy - half), ImVec2(x1, cy + half),
+                      ImGui::GetColorU32(hovered || active ? rgb(84, 79, 90) : rgb(66, 62, 72)), half);
+    dl->AddRectFilled(ImVec2(ImMin(from, pill_x), cy - half), ImVec2(ImMax(from, pill_x), cy + half),
+                      ImGui::GetColorU32(rgb(226, 166, 86, 0.85f)), half);
+
+    // the pill with the value
+    const float ph = floorf(ImGui::GetFrameHeight() - 6.0f * s);
+    const ImVec2 p0(floorf(grab.Min.x), floorf(cy - ph * 0.5f)), p1(floorf(grab.Max.x), p0.y + ph);
+    const ImVec4 pill = active ? rgb(252, 208, 140) : hovered ? rgb(240, 186, 110) : rgb(226, 166, 86);
+    dl->AddRectFilled(p0, p1, ImGui::GetColorU32(pill), ph * 0.5f);
+    dl->AddText(ImVec2(floorf((p0.x + p1.x - text_sz.x) * 0.5f), floorf(cy - text_sz.y * 0.5f)),
+                ImGui::GetColorU32(rgb(28, 24, 20)), text);
+    return changed;
+}
+
 static void param_row(Param& p, float label_w)
 {
     ImGui::PushID(p.name);
@@ -1059,7 +1156,7 @@ static void param_row(Param& p, float label_w)
     else
     {
         float v = p.value;
-        if (ImGui::SliderFloat("##v", &v, p.min, p.max, decimals(p) == 3 ? "%.3f" : "%.2f", ImGuiSliderFlags_AlwaysClamp))
+        if (pill_slider("##v", ImGuiDataType_Float, &v, &p.min, &p.max, decimals(p) == 3 ? "%.3f" : "%.2f", ImGuiSliderFlags_AlwaysClamp))
         {
             if (p.step > 0.0f) v = p.min + floorf((v - p.min) / p.step + 0.5f) * p.step;
             if (v < p.min) v = p.min;
@@ -1249,21 +1346,36 @@ static void draw_ui(void)
     }
     if (off) ImGui::PopStyleColor();
 
-    // magnifier: on / off, zoom and size in one row
+    // label column width: widest label + gap (parameters and the magnifier rows)
+    float label_w = ImMax(ImGui::CalcTextSize(tr(S_LENS_ZOOM)).x, ImGui::CalcTextSize(tr(S_LENS_SIZE)).x);
+    for (int i = 0; i < NP; i++)
+    {
+        float w = ImGui::CalcTextSize(P[i].label[0] ? P[i].label : P[i].name).x;
+        if (w > label_w) label_w = w;
+    }
+    label_w += ImGui::GetStyle().WindowPadding.x + 14.0f * s;
+
+    // magnifier: on / off, then zoom and size as rows like the parameters
     ImGui::BeginDisabled(!g_copy_tex_sub);
     ImGui::Checkbox(tr(S_LENS), &g_lens_on);
     ImGui::SetItemTooltip("%s", tr(S_LENS_TIP));
     if (g_lens_on)
     {
         lens_clamp();
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
-        ImGui::SliderInt("##lens_zoom", &g_lens_zoom, LENS_ZOOM_MIN, LENS_ZOOM_MAX, tr(S_LENS_ZOOM), ImGuiSliderFlags_AlwaysClamp);
-        ImGui::SetItemTooltip("%s", tr(S_LENS_TIP));
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::SliderInt("##lens_size", &g_lens_d, lens_d_min(), lens_d_max(), tr(S_LENS_SIZE), ImGuiSliderFlags_AlwaysClamp);
-        ImGui::SetItemTooltip("%s", tr(S_LENS_TIP));
+        const int zmin = LENS_ZOOM_MIN, zmax = LENS_ZOOM_MAX, dmin = lens_d_min(), dmax = lens_d_max();
+        const struct { int label; const char* id; int* v; const int* lo; const int* hi; const char* fmt; } rows[2] = {
+            { S_LENS_ZOOM, "##lens_zoom", &g_lens_zoom, &zmin, &zmax, "×%d" },
+            { S_LENS_SIZE, "##lens_size", &g_lens_d, &dmin, &dmax, tr(S_LENS_PX) },
+        };
+        for (int i = 0; i < 2; i++)
+        {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(tr(rows[i].label));
+            ImGui::SameLine(label_w);
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            pill_slider(rows[i].id, ImGuiDataType_S32, rows[i].v, rows[i].lo, rows[i].hi, rows[i].fmt, ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip("%s", tr(S_LENS_TIP));
+        }
     }
     ImGui::EndDisabled();
 
@@ -1313,14 +1425,6 @@ static void draw_ui(void)
     }
     ImGui::Spacing();
 
-    // label column width: widest label + gap
-    float label_w = 0.0f;
-    for (int i = 0; i < NP; i++)
-    {
-        float w = ImGui::CalcTextSize(P[i].label[0] ? P[i].label : P[i].name).x;
-        if (w > label_w) label_w = w;
-    }
-    label_w += ImGui::GetStyle().WindowPadding.x + 14.0f * s;
     ImGui::PushItemWidth(-FLT_MIN);
 
     // groups in declared order, then parameters without a known group
