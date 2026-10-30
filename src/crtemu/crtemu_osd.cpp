@@ -1034,9 +1034,10 @@ static float scalar_f(ImGuiDataType type, const void* p)
 }
 
 // A slider drawn as a thin line with a pill-shaped handle that carries the value, so the number
-// is never under the handle. The handle is as wide as the widest value of this slider and does not
-// change size. Input is ImGui's own, as in ImGui::SliderScalar: drag, Ctrl+click or Enter to type
-// a number, arrows. The pill is the grab rectangle SliderBehavior returns.
+// is never under the handle. The handle is at least as wide as the widest value of this slider
+// (an integer slider makes it at least one step of the line) and does not change size. Input is
+// ImGui's own, as in ImGui::SliderScalar: drag, or Ctrl+click for the input box. The pill is the grab
+// rectangle SliderBehavior returns.
 static bool pill_slider(const char* id_label, ImGuiDataType type, void* v, const void* vmin, const void* vmax,
                         const char* fmt, ImGuiSliderFlags flags)
 {
@@ -1261,8 +1262,11 @@ static void lens_window(void)
     // whole-pixel corner: every screen pixel becomes an even z x z block
     const ImVec2 p0(floorf(lx - r), floorf(ly - r)), p1(p0.x + L, p0.y + L);
 
-    ImGui::SetNextWindowPos(p0, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(L, L), ImGuiCond_Always);
+    // the window has a margin for the rim: ImGui clips a window's drawing to its rectangle, and the
+    // rings reach r + 3s
+    const float rim = ceilf(4.0f * g_scale);
+    ImGui::SetNextWindowPos(ImVec2(p0.x - rim, p0.y - rim), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(L + 2.0f * rim, L + 2.0f * rim), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
     const bool shown = ImGui::Begin("##crtemu_lens", NULL,
@@ -1273,7 +1277,7 @@ static void lens_window(void)
     if (shown)
     {
         // drag to move, wheel to zoom; both take effect in the next frame
-        ImGui::InvisibleButton("##drag", ImVec2(L, L));
+        ImGui::InvisibleButton("##drag", ImVec2(L + 2.0f * rim, L + 2.0f * rim));
         if (ImGui::IsItemActive()) { g_lens_cx += io.MouseDelta.x; g_lens_cy += io.MouseDelta.y; }
         // one zoom step per notch: a high-resolution wheel or a touchpad sends fractions of one
         g_lens_wheel = ImGui::IsItemHovered() ? g_lens_wheel + io.MouseWheel : 0.0f;
