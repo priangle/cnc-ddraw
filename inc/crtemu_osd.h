@@ -13,6 +13,9 @@
  * enum-like parameters and presets (see the crt-emu build.py), one "//@lang|xx" block per language.
  * The language is "lang=" in install.ini next to the shader (crt-emu-setup writes it): en (default)
  * or ru. It also picks the language of the panel's own buttons.
+ *
+ * The panel's magnifier is a round lens under it with the screen's own pixels enlarged (copied from
+ * the back buffer in crtemu_osd_render, before the panel is drawn); it is shown only with the panel.
  */
 
 #ifdef __cplusplus

@@ -22,6 +22,9 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "backends/imgui_impl_opengl3.h"
+// the backend's own GL loader, for the few texture calls of the magnifier: every build of the
+// panel (the DLL and the test hosts) links it with the backend, and it is loaded once the backend is
+#include "backends/imgui_impl_opengl3_loader.h"
 #include "crtemu_osd.h"
 
 #ifdef CRTEMU_OSD_TEST
@@ -70,7 +73,8 @@ static int    g_preset = -1;            // preset the current values came from, 
 enum
 {
     S_TITLE, S_OWN, S_OWN_DIRTY, S_NO_PRESETS, S_AB, S_SAVE, S_REVERT, S_UNSAVED, S_PARAMS, S_FOOTER,
-    S_READ_FAIL, S_WRITE_FAIL, S_SAVED, S_DEFAULTS_ONLY, S_LANG_TIP, S_LANG_FAIL, S_COUNT
+    S_READ_FAIL, S_WRITE_FAIL, S_SAVED, S_DEFAULTS_ONLY, S_LANG_TIP, S_LANG_FAIL,
+    S_LENS, S_LENS_ZOOM, S_LENS_SIZE, S_LENS_TIP, S_COUNT
 };
 
 static const char* const LANG_ID[] = { "en", "ru" };
@@ -97,6 +101,15 @@ static const char* const STR[S_COUNT][2] = {
     { "Panel language", "Язык панели" },
     { "Could not save the language to install.ini (no write access to the game folder?)",
       "Не удалось сохранить язык в install.ini (нет прав на папку игры?)" },
+    { "Magnifier", "Лупа" },
+    { "Zoom ×%d", "Увеличение ×%d" },
+    { "Size %d px", "Размер %d пикс." },
+    { "A close-up of the screen's own pixels: the mask and the lines at their real size. "
+      "Drag the magnifier with the mouse, the wheel over it changes the zoom. "
+      "It is shown only with the panel; Win+Shift+S takes a screenshot with it.",
+      "Пиксели самого экрана вблизи: маска и строки в настоящем размере. "
+      "Лупу двигайте мышью, колесо над ней меняет увеличение. "
+      "Она видна только вместе с панелью; Win+Shift+S — снимок экрана вместе с ней." },
 };
 
 static int g_lang;                      // index into LANG_ID and STR
@@ -1066,11 +1079,142 @@ static void param_row(Param& p, float label_w)
     ImGui::PopID();
 }
 
+// ---------------------------------------------------------------------------------------------
+// magnifier: a round lens under the panel with the screen's own pixels enlarged, zoom x zoom
+// each, so the mask and the lines can be seen (and shot) at their real size. Every frame the
+// square under the lens is copied from the back buffer, which still holds only the shaded frame:
+// ImGui draws later, in RenderDrawData. Not saved, it lives while the game runs.
+// ---------------------------------------------------------------------------------------------
+
+typedef void (APIENTRY *CopyTexSubImage2DProc)(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                               GLint x, GLint y, GLsizei width, GLsizei height);
+
+enum { LENS_ZOOM_MIN = 2, LENS_ZOOM_MAX = 8 };
+
+static bool   g_lens_on;
+static int    g_lens_zoom = 4;
+static int    g_lens_d;                         // diameter in screen pixels, 0 = default
+static float  g_lens_cx = -1.0f, g_lens_cy;     // magnified point, < 0 = middle of the screen
+static float  g_lens_wheel;                     // wheel movement not yet turned into zoom steps
+static GLuint g_lens_tex;
+static int    g_lens_tex_n;                     // side of g_lens_tex in pixels
+static CopyTexSubImage2DProc g_copy_tex_sub;    // GL 1.1, not in the backend's loader
+
+static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+static int lens_d_min(void) { return (int)(160 * g_scale); }
+
+static int lens_d_max(void)
+{
+    const ImVec2 ds = ImGui::GetIO().DisplaySize;
+    int m = (int)((ds.x < ds.y ? ds.x : ds.y) * 0.9f);
+    return m > lens_d_min() ? m : lens_d_min();
+}
+
+static void lens_clamp(void)
+{
+    if (g_lens_d <= 0) g_lens_d = (int)(360 * g_scale);
+    if (g_lens_d < lens_d_min()) g_lens_d = lens_d_min();
+    if (g_lens_d > lens_d_max()) g_lens_d = lens_d_max();
+    if (g_lens_zoom < LENS_ZOOM_MIN) g_lens_zoom = LENS_ZOOM_MIN;
+    if (g_lens_zoom > LENS_ZOOM_MAX) g_lens_zoom = LENS_ZOOM_MAX;
+}
+
+// copy the n x n square at (x, y) (top-left, screen pixels) of the back buffer into g_lens_tex
+static void lens_grab(int x, int y, int n, int fb_height)
+{
+    GLint prev = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prev);
+    if (!g_lens_tex) glGenTextures(1, &g_lens_tex);
+    glBindTexture(GL_TEXTURE_2D, g_lens_tex);
+    if (g_lens_tex_n != n)
+    {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, n, n, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        g_lens_tex_n = n;
+    }
+    g_copy_tex_sub(GL_TEXTURE_2D, 0, 0, 0, x, fb_height - y - n, n, n);   // GL rows go bottom-up
+    glBindTexture(GL_TEXTURE_2D, (GLuint)prev);
+}
+
+// before the panel: the window is created at the bottom of ImGui's window list
+// (NoBringToFrontOnFocus) and stays there, under the panel
+static void lens_window(void)
+{
+    if (!g_lens_on || !g_copy_tex_sub) return;
+    lens_clamp();
+    ImGuiIO& io = ImGui::GetIO();
+    // H: the window's last row is left out. With nonexclusive=true (as the setup writes ddraw.ini)
+    // cnc-ddraw makes the window one row taller than the screen and never draws that row
+    // (render.height + 1 and opengl_y_align in dd.c). Elsewhere this only loses the bottom row.
+    const int W = (int)io.DisplaySize.x, H = (int)io.DisplaySize.y - 1;
+    const int z = g_lens_zoom;
+    const int n = (g_lens_d + z / 2) / z;              // screen pixels across the lens
+    const float L = (float)(n * z), r = L * 0.5f;      // lens side on screen
+    const float h = n * 0.5f;
+    // the magnified point goes right up to the screen edges, the lens stays whole on the screen:
+    // near an edge it stops and the enlarged area slides on under it
+    if (g_lens_cx < 0.0f) { g_lens_cx = W * 0.5f; g_lens_cy = H * 0.5f; }
+    g_lens_cx = clampf(g_lens_cx, h, W - h);
+    g_lens_cy = clampf(g_lens_cy, h, H - h);
+    const float lx = clampf(g_lens_cx, r, W - r), ly = clampf(g_lens_cy, r, H - r);
+    // whole-pixel corner: every screen pixel becomes an even z x z block
+    const ImVec2 p0(floorf(lx - r), floorf(ly - r)), p1(p0.x + L, p0.y + L);
+
+    ImGui::SetNextWindowPos(p0, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(L, L), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const bool shown = ImGui::Begin("##crtemu_lens", NULL,
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar(2);
+    if (shown)
+    {
+        // drag to move, wheel to zoom; both take effect in the next frame
+        ImGui::InvisibleButton("##drag", ImVec2(L, L));
+        if (ImGui::IsItemActive()) { g_lens_cx += io.MouseDelta.x; g_lens_cy += io.MouseDelta.y; }
+        // one zoom step per notch: a high-resolution wheel or a touchpad sends fractions of one
+        g_lens_wheel = ImGui::IsItemHovered() ? g_lens_wheel + io.MouseWheel : 0.0f;
+        const int steps = (int)g_lens_wheel;
+        if (steps)
+        {
+            g_lens_wheel -= (float)steps;
+            g_lens_zoom += steps;
+            lens_clamp();
+        }
+
+        // the n x n square around the magnified point (inside the screen, see the clamps above)
+        int sx = (int)floorf(g_lens_cx - h), sy = (int)floorf(g_lens_cy - h);
+        if (sx > W - n) sx = W - n;
+        if (sy > H - n) sy = H - n;
+        if (sx < 0) sx = 0;
+        if (sy < 0) sy = 0;
+        lens_grab(sx, sy, n, (int)io.DisplaySize.y);
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+        const ImVec2 c(p0.x + r, p0.y + r);
+        const float s = g_scale;
+        if (pio.DrawCallback_SetSamplerNearest) dl->AddCallback(pio.DrawCallback_SetSamplerNearest, NULL);
+        dl->AddImageRounded((ImTextureID)g_lens_tex, p0, p1, ImVec2(0.0f, 1.0f), ImVec2(1.0f, 0.0f), IM_COL32_WHITE, r);
+        if (pio.DrawCallback_SetSamplerLinear) dl->AddCallback(pio.DrawCallback_SetSamplerLinear, NULL);
+        dl->AddCircle(c, r + 1.5f * s, IM_COL32(12, 11, 13, 220), 0, 3.0f * s);
+        dl->AddCircle(c, r, ImGui::GetColorU32(ImGuiCol_SliderGrab), 0, 1.5f * s);
+    }
+    ImGui::End();
+}
+
 static int g_lang_pending = -1;         // EN/RU pressed: switched before the next frame's widgets
 
 static void draw_ui(void)
 {
     if (g_lang_pending >= 0) { set_lang(g_lang_pending); g_lang_pending = -1; }
+    lens_window();
     ImGuiIO& io = ImGui::GetIO();
     const float s = g_scale;
     ImGui::SetNextWindowPos(ImVec2(28 * s, 28 * s), ImGuiCond_FirstUseEver);
@@ -1104,6 +1248,24 @@ static void draw_ui(void)
 #endif
     }
     if (off) ImGui::PopStyleColor();
+
+    // magnifier: on / off, zoom and size in one row
+    ImGui::BeginDisabled(!g_copy_tex_sub);
+    ImGui::Checkbox(tr(S_LENS), &g_lens_on);
+    ImGui::SetItemTooltip("%s", tr(S_LENS_TIP));
+    if (g_lens_on)
+    {
+        lens_clamp();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth((ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f);
+        ImGui::SliderInt("##lens_zoom", &g_lens_zoom, LENS_ZOOM_MIN, LENS_ZOOM_MAX, tr(S_LENS_ZOOM), ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", tr(S_LENS_TIP));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::SliderInt("##lens_size", &g_lens_d, lens_d_min(), lens_d_max(), tr(S_LENS_SIZE), ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", tr(S_LENS_TIP));
+    }
+    ImGui::EndDisabled();
 
     int d = dirty();
     ImGui::BeginDisabled(!d);
@@ -1214,6 +1376,7 @@ extern "C" void crtemu_osd_render(void* hwnd, int width, int height)
     {
         if (!ImGui_ImplOpenGL3_Init(NULL)) return;
         g_gl_ready = 1;
+        g_copy_tex_sub = (CopyTexSubImage2DProc)imgl3wGetProcAddress("glCopyTexSubImage2D");
     }
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2((float)width, (float)height);
@@ -1236,6 +1399,10 @@ extern "C" void crtemu_osd_gl_shutdown(void)
     if (g_ctx && g_gl_ready)
     {
         ImGui::SetCurrentContext(g_ctx);
+        if (g_lens_tex) glDeleteTextures(1, &g_lens_tex);   // before the backend unloads its GL functions
+        g_lens_tex = 0;
+        g_lens_tex_n = 0;
+        g_copy_tex_sub = NULL;
         ImGui_ImplOpenGL3_Shutdown();
         g_gl_ready = 0;
     }
